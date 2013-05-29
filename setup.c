@@ -12,24 +12,27 @@
 #include <vdr/themes.h>
 
 
-cSetupLine *FindSetupLine(cConfig<cSetupLine>& config, const char *name, const char *plugin)
+class cDBusSetupHelper
 {
-  if (name != NULL) {
-     cSetupLine *sl = config.First();
-     while (sl != NULL) {
-           if (((sl->Plugin() == NULL) == (plugin == NULL))
-            && ((plugin == NULL) || (strcasecmp(sl->Plugin(), plugin) == 0))
-            && (strcasecmp(sl->Name(), name) == 0))
-              return sl;
-           sl = config.Next(sl);
-           }
-     }
-  return NULL;
-}
+public:
+  static const char *_xmlNodeInfo;
 
-class cDBusSetupActions
-{
 private:
+  static cSetupLine *FindSetupLine(cConfig<cSetupLine>& config, const char *name, const char *plugin)
+  {
+    if (name != NULL) {
+       cSetupLine *sl = config.First();
+       while (sl != NULL) {
+             if (((sl->Plugin() == NULL) == (plugin == NULL))
+              && ((plugin == NULL) || (strcasecmp(sl->Plugin(), plugin) == 0))
+              && (strcasecmp(sl->Name(), name) == 0))
+                return sl;
+             sl = config.Next(sl);
+             }
+       }
+    return NULL;
+  };
+
   class cSetupBinding : public cListObject
   {
   private:
@@ -188,69 +191,58 @@ public:
        }
   }
 
-  static void List(DBusConnection* conn, DBusMessage* msg)
+public:
+  static void List(cDBusObject *Object, GVariant *Parameters, GDBusMethodInvocation *Invocation)
   {
-    DBusMessage *reply = dbus_message_new_method_return(msg);
-    DBusMessageIter args;
-    DBusMessageIter array;
-    DBusMessageIter element;
-    DBusMessageIter variant;
-    DBusMessageIter vstruct;
-    dbus_message_iter_init_append(reply, &args);
-    if (!dbus_message_iter_open_container(&args, DBUS_TYPE_ARRAY, "(sv)", &array))
-       esyslog("dbus2vdr: %s.List: can't open array container", DBUS_VDR_SETUP_INTERFACE);
+    // a(sv)
+    GVariantBuilder *array = g_variant_builder_new(G_VARIANT_TYPE("a(sv)"));
+    GVariantBuilder *element = NULL;
+    GVariantBuilder *variant = NULL;
+    GVariantBuilder *struc = NULL;
+
     for (cSetupBinding *b = _bindings.First(); b; b = _bindings.Next(b)) {
-        if (!dbus_message_iter_open_container(&array, DBUS_TYPE_STRUCT, NULL, &element))
-           esyslog("dbus2vdr: %s.List: can't open struct container", DBUS_VDR_SETUP_INTERFACE);
-        if (!dbus_message_iter_append_basic(&element, DBUS_TYPE_STRING, &b->Name))
-           esyslog("dbus2vdr: %s.List: out of memory while appending the key name", DBUS_VDR_SETUP_INTERFACE);
+        element = g_variant_builder_new(G_VARIANT_TYPE("(sv)"));
+        g_variant_builder_add_value(element, g_variant_new_string(b->Name));
+        
         switch (b->Type) {
          case cSetupBinding::dstString:
           {
-           if (!dbus_message_iter_open_container(&element, DBUS_TYPE_VARIANT, "(si)", &variant))
-              esyslog("dbus2vdr: %s.List: can't open variant container", DBUS_VDR_SETUP_INTERFACE);
-           if (!dbus_message_iter_open_container(&variant, DBUS_TYPE_STRUCT, NULL, &vstruct))
-              esyslog("dbus2vdr: %s.List: can't open struct container", DBUS_VDR_SETUP_INTERFACE);
-           const char *str = (const char*)b->Value;
-           if (!dbus_message_iter_append_basic(&vstruct, DBUS_TYPE_STRING, &str))
-              esyslog("dbus2vdr: %s.List: out of memory while appending the string value", DBUS_VDR_SETUP_INTERFACE);
-           if (!dbus_message_iter_append_basic(&vstruct, DBUS_TYPE_INT32, &b->StrMaxLength))
-              esyslog("dbus2vdr: %s.List: out of memory while appending the max string length value", DBUS_VDR_SETUP_INTERFACE);
-           if (!dbus_message_iter_close_container(&variant, &vstruct))
-              esyslog("dbus2vdr: %s.List: can't close struct container", DBUS_VDR_SETUP_INTERFACE);
+           struc = g_variant_builder_new(G_VARIANT_TYPE("(si)"));
+           g_variant_builder_add_value(struc, g_variant_new_string((const char*)b->Value));
+           g_variant_builder_add_value(struc, g_variant_new_int32(b->StrMaxLength));
+
+           variant = g_variant_builder_new(G_VARIANT_TYPE("v"));
+           g_variant_builder_add_value(variant, g_variant_builder_end(struc));
+           g_variant_builder_add_value(element, g_variant_builder_end(variant));
+           g_variant_builder_unref(variant);
+           g_variant_builder_unref(struc);
            break;
           }
          case cSetupBinding::dstInt32:
           {
-           if (!dbus_message_iter_open_container(&element, DBUS_TYPE_VARIANT, "(iii)", &variant))
-              esyslog("dbus2vdr: %s.List: can't open variant container", DBUS_VDR_SETUP_INTERFACE);
-           if (!dbus_message_iter_open_container(&variant, DBUS_TYPE_STRUCT, NULL, &vstruct))
-              esyslog("dbus2vdr: %s.List: can't open struct container", DBUS_VDR_SETUP_INTERFACE);
-           int i32 = *(int*)(b->Value);
-           if (!dbus_message_iter_append_basic(&vstruct, DBUS_TYPE_INT32, &i32))
-              esyslog("dbus2vdr: %s.List: out of memory while appending the integer value", DBUS_VDR_SETUP_INTERFACE);
-           if (!dbus_message_iter_append_basic(&vstruct, DBUS_TYPE_INT32, &b->Int32MinValue))
-              esyslog("dbus2vdr: %s.List: out of memory while appending the min integer value", DBUS_VDR_SETUP_INTERFACE);
-           if (!dbus_message_iter_append_basic(&vstruct, DBUS_TYPE_INT32, &b->Int32MaxValue))
-              esyslog("dbus2vdr: %s.List: out of memory while appending the max integer value", DBUS_VDR_SETUP_INTERFACE);
-           if (!dbus_message_iter_close_container(&variant, &vstruct))
-              esyslog("dbus2vdr: %s.List: can't close struct container", DBUS_VDR_SETUP_INTERFACE);
+           struc = g_variant_builder_new(G_VARIANT_TYPE("(iii)"));
+           g_variant_builder_add_value(struc, g_variant_new_int32(*(int*)(b->Value)));
+           g_variant_builder_add_value(struc, g_variant_new_int32(b->Int32MinValue));
+           g_variant_builder_add_value(struc, g_variant_new_int32(b->Int32MaxValue));
+
+           variant = g_variant_builder_new(G_VARIANT_TYPE("v"));
+           g_variant_builder_add_value(variant, g_variant_builder_end(struc));
+           g_variant_builder_add_value(element, g_variant_builder_end(variant));
+           g_variant_builder_unref(variant);
+           g_variant_builder_unref(struc);
            break;
           }
          case cSetupBinding::dstTimeT:
           {
-           if (!dbus_message_iter_open_container(&element, DBUS_TYPE_VARIANT, "x", &variant))
-              esyslog("dbus2vdr: %s.List: can't open variant container", DBUS_VDR_SETUP_INTERFACE);
-           time_t i64 = *(time_t*)(b->Value);
-           if (!dbus_message_iter_append_basic(&variant, DBUS_TYPE_INT64, &i64))
-              esyslog("dbus2vdr: %s.List: out of memory while appending the integer value", DBUS_VDR_SETUP_INTERFACE);
+           variant = g_variant_builder_new(G_VARIANT_TYPE("v"));
+           g_variant_builder_add_value(variant, g_variant_new_int64(*(time_t*)(b->Value)));
+           g_variant_builder_add_value(element, g_variant_builder_end(variant));
+           g_variant_builder_unref(variant);
            break;
           }
          }
-         if (!dbus_message_iter_close_container(&element, &variant))
-            esyslog("dbus2vdr: %s.List: can't close variant container", DBUS_VDR_SETUP_INTERFACE);
-         if (!dbus_message_iter_close_container(&array, &element))
-            esyslog("dbus2vdr: %s.List: can't close struct container", DBUS_VDR_SETUP_INTERFACE);
+         g_variant_builder_add_value(array, g_variant_builder_end(element));
+         g_variant_builder_unref(element);
         }
     int nolimit = -1;
     cString name;
@@ -258,55 +250,37 @@ public:
         // output all plugins and unknown settings
         if ((line->Plugin() == NULL) && (cSetupBinding::Find(_bindings, line->Name()) != NULL))
            continue;
-        if (!dbus_message_iter_open_container(&array, DBUS_TYPE_STRUCT, NULL, &element))
-           esyslog("dbus2vdr: %s.List: can't open struct container", DBUS_VDR_SETUP_INTERFACE);
+        element = g_variant_builder_new(G_VARIANT_TYPE("(sv)"));
         if (line->Plugin() == NULL)
            name = cString::sprintf("%s", line->Name());
         else
            name = cString::sprintf("%s.%s", line->Plugin(), line->Name());
-        const char *str = *name;
-        if (!dbus_message_iter_append_basic(&element, DBUS_TYPE_STRING, &str))
-           esyslog("dbus2vdr: %s.List: out of memory while appending the key name", DBUS_VDR_SETUP_INTERFACE);
-        if (!dbus_message_iter_open_container(&element, DBUS_TYPE_VARIANT, "(si)", &variant))
-           esyslog("dbus2vdr: %s.List: can't open variant container", DBUS_VDR_SETUP_INTERFACE);
-        if (!dbus_message_iter_open_container(&variant, DBUS_TYPE_STRUCT, NULL, &vstruct))
-           esyslog("dbus2vdr: %s.List: can't open struct container", DBUS_VDR_SETUP_INTERFACE);
-        str = line->Value();
-        if (!dbus_message_iter_append_basic(&vstruct, DBUS_TYPE_STRING, &str))
-           esyslog("dbus2vdr: %s.List: out of memory while appending the string value", DBUS_VDR_SETUP_INTERFACE);
-        if (!dbus_message_iter_append_basic(&vstruct, DBUS_TYPE_INT32, &nolimit))
-           esyslog("dbus2vdr: %s.List: out of memory while appending the max string length value", DBUS_VDR_SETUP_INTERFACE);
-        if (!dbus_message_iter_close_container(&variant, &vstruct))
-           esyslog("dbus2vdr: %s.List: can't close struct container", DBUS_VDR_SETUP_INTERFACE);
-         if (!dbus_message_iter_close_container(&element, &variant))
-            esyslog("dbus2vdr: %s.List: can't close variant container", DBUS_VDR_SETUP_INTERFACE);
-         if (!dbus_message_iter_close_container(&array, &element))
-            esyslog("dbus2vdr: %s.List: can't close struct container", DBUS_VDR_SETUP_INTERFACE);
+        g_variant_builder_add_value(element, g_variant_new_string(*name));
+        struc = g_variant_builder_new(G_VARIANT_TYPE("(si)"));
+        g_variant_builder_add_value(struc, g_variant_new_string(line->Value()));
+        g_variant_builder_add_value(struc, g_variant_new_int32(nolimit));
+        variant = g_variant_builder_new(G_VARIANT_TYPE("v"));
+        g_variant_builder_add_value(variant, g_variant_builder_end(struc));
+        g_variant_builder_add_value(element, g_variant_builder_end(variant));
+        g_variant_builder_add_value(array, g_variant_builder_end(element));
+        g_variant_builder_unref(variant);
+        g_variant_builder_unref(struc);
+        g_variant_builder_unref(element);
         }
-    if (!dbus_message_iter_close_container(&args, &array))
-       esyslog("dbus2vdr: %s.List: can't close array container", DBUS_VDR_SETUP_INTERFACE);
 
-    dbus_uint32_t serial = 0;
-    if (!dbus_connection_send(conn, reply, &serial))
-       esyslog("dbus2vdr: %s.List: out of memory while sending the reply", DBUS_VDR_SETUP_INTERFACE);
-    dbus_message_unref(reply);
-    return;
-  }
+    GVariantBuilder *builder = g_variant_builder_new(G_VARIANT_TYPE("(a(sv))"));
+    g_variant_builder_add_value(builder, g_variant_builder_end(array));
+    g_dbus_method_invocation_return_value(Invocation, g_variant_builder_end(builder));
+    g_variant_builder_unref(array);
+    g_variant_builder_unref(builder);
+  };
 
-  static void Get(DBusConnection* conn, DBusMessage* msg)
+  static void Get(cDBusObject *Object, GVariant *Parameters, GDBusMethodInvocation *Invocation)
   {
-    int rc;
-    const char *name = NULL;
-    DBusMessageIter args;
-    if (!dbus_message_iter_init(msg, &args))
-       esyslog("dbus2vdr: %s.Get: message misses an argument for the name", DBUS_VDR_SETUP_INTERFACE);
-    else {
-       rc = cDBusHelper::GetNextArg(args, DBUS_TYPE_STRING, &name);
-       if (rc < 0)
-          esyslog("dbus2vdr: %s.Get: 'name' argument is not a string", DBUS_VDR_SETUP_INTERFACE);
-       }
+    const gchar *name = NULL;
+    g_variant_get(Parameters, "(&s)", &name);
 
-    dbus_int32_t replyCode = 501;
+    gint32 replyCode = 501;
     cString replyMessage = "missing arguments";
     if (name != NULL) {
        cSetupBinding *b = cSetupBinding::Find(_bindings, name);
@@ -343,121 +317,94 @@ public:
           if (value == NULL) {
              replyMessage = cString::sprintf("%s not found in setup.conf", name);
              esyslog("dbus2vdr: %s.Get: %s not found in setup.conf", DBUS_VDR_SETUP_INTERFACE, name);
-             cDBusHelper::SendReply(conn, msg, replyCode, replyMessage);
+             GVariantBuilder *builder = g_variant_builder_new(G_VARIANT_TYPE("(vis)"));
+             GVariantBuilder *variant = g_variant_builder_new(G_VARIANT_TYPE("v"));
+             g_variant_builder_add_value(variant, g_variant_new_string(""));
+             g_variant_builder_add_value(builder, g_variant_builder_end(variant));
+             g_variant_builder_add(builder, "i", replyCode);
+             g_variant_builder_add(builder, "s", *replyMessage);
+             g_dbus_method_invocation_return_value(Invocation, g_variant_builder_end(builder));
+             g_variant_builder_unref(builder);
+             g_variant_builder_unref(variant);
              return;
              }
           replyCode = 900;
           replyMessage = cString::sprintf("getting %s", name);
 
-          DBusMessage *reply = dbus_message_new_method_return(msg);
-          DBusMessageIter replyArgs;
-          dbus_message_iter_init_append(reply, &replyArgs);
-          DBusMessageIter variant;
-          if (!dbus_message_iter_open_container(&replyArgs, DBUS_TYPE_VARIANT, "s", &variant))
-             esyslog("dbus2vdr: %s.Get: can't open variant container", DBUS_VDR_SETUP_INTERFACE);
-          if (!dbus_message_iter_append_basic(&variant, DBUS_TYPE_STRING, &value))
-             esyslog("dbus2vdr: %s.Get: out of memory while appending the string value", DBUS_VDR_SETUP_INTERFACE);
-          if (!dbus_message_iter_close_container(&replyArgs, &variant))
-             esyslog("dbus2vdr: %s.Get: can't close variant container", DBUS_VDR_SETUP_INTERFACE);
-          if (!dbus_message_iter_append_basic(&replyArgs, DBUS_TYPE_INT32, &replyCode))
-             esyslog("dbus2vdr: %s.Get: out of memory while appending the return-code", DBUS_VDR_SETUP_INTERFACE);
-          const char *message = replyMessage;
-          if (!dbus_message_iter_append_basic(&replyArgs, DBUS_TYPE_STRING, &message))
-             esyslog("dbus2vdr: %s.Get: out of memory while appending the reply-message", DBUS_VDR_SETUP_INTERFACE);
-
-          dbus_uint32_t serial = 0;
-          if (!dbus_connection_send(conn, reply, &serial))
-             esyslog("dbus2vdr: %s.Get: out of memory while sending the reply", DBUS_VDR_SETUP_INTERFACE);
-          dbus_message_unref(reply);
+          GVariantBuilder *builder = g_variant_builder_new(G_VARIANT_TYPE("(vis)"));
+          GVariantBuilder *variant = g_variant_builder_new(G_VARIANT_TYPE("v"));
+          g_variant_builder_add_value(variant, g_variant_new_string(value));
+          g_variant_builder_add_value(builder, g_variant_builder_end(variant));
+          g_variant_builder_add(builder, "i", replyCode);
+          g_variant_builder_add(builder, "s", *replyMessage);
+          g_dbus_method_invocation_return_value(Invocation, g_variant_builder_end(builder));
+          g_variant_builder_unref(builder);
+          g_variant_builder_unref(variant);
           return;
           }
 
        replyCode = 900;
        replyMessage = cString::sprintf("getting %s", name);
 
-       DBusMessage *reply = dbus_message_new_method_return(msg);
-       DBusMessageIter replyArgs;
-       dbus_message_iter_init_append(reply, &replyArgs);
-       DBusMessageIter variant;
-
+       GVariantBuilder *builder = g_variant_builder_new(G_VARIANT_TYPE("(vis)"));
+       GVariantBuilder *variant = g_variant_builder_new(G_VARIANT_TYPE("v"));
        switch (b->Type) {
          case cSetupBinding::dstString:
           {
-           if (!dbus_message_iter_open_container(&replyArgs, DBUS_TYPE_VARIANT, "s", &variant))
-              esyslog("dbus2vdr: %s.Get: can't open variant container", DBUS_VDR_SETUP_INTERFACE);
-           const char *str = (const char*)b->Value;
-           if (!dbus_message_iter_append_basic(&variant, DBUS_TYPE_STRING, &str))
-              esyslog("dbus2vdr: %s.Get: out of memory while appending the string value", DBUS_VDR_SETUP_INTERFACE);
+           g_variant_builder_add(variant, "s", (const char*)b->Value);
            break;
           }
          case cSetupBinding::dstInt32:
           {
-           if (!dbus_message_iter_open_container(&replyArgs, DBUS_TYPE_VARIANT, "i", &variant))
-              esyslog("dbus2vdr: %s.Get: can't open variant container", DBUS_VDR_SETUP_INTERFACE);
-           int i32 = *(int*)(b->Value);
-           if (!dbus_message_iter_append_basic(&variant, DBUS_TYPE_INT32, &i32))
-              esyslog("dbus2vdr: %s.Get: out of memory while appending the integer value", DBUS_VDR_SETUP_INTERFACE);
+           g_variant_builder_add(variant, "i", *(int*)(b->Value));
            break;
           }
          case cSetupBinding::dstTimeT:
           {
-           if (!dbus_message_iter_open_container(&replyArgs, DBUS_TYPE_VARIANT, "x", &variant))
-              esyslog("dbus2vdr: %s.Get: can't open variant container", DBUS_VDR_SETUP_INTERFACE);
-           time_t i64 = *(time_t*)(b->Value);
-           if (!dbus_message_iter_append_basic(&variant, DBUS_TYPE_INT64, &i64))
-              esyslog("dbus2vdr: %s.Get: out of memory while appending the integer value", DBUS_VDR_SETUP_INTERFACE);
+           g_variant_builder_add(variant, "x", *(time_t*)(b->Value));
            break;
           }
          }
-       if (!dbus_message_iter_close_container(&replyArgs, &variant))
-          esyslog("dbus2vdr: %s.Get: can't close variant container", DBUS_VDR_SETUP_INTERFACE);
 
-       if (!dbus_message_iter_append_basic(&replyArgs, DBUS_TYPE_INT32, &replyCode))
-          esyslog("dbus2vdr: %s.Get: out of memory while appending the return-code", DBUS_VDR_SETUP_INTERFACE);
-
-       const char *message = replyMessage;
-       if (!dbus_message_iter_append_basic(&replyArgs, DBUS_TYPE_STRING, &message))
-          esyslog("dbus2vdr: %s.Get: out of memory while appending the reply-message", DBUS_VDR_SETUP_INTERFACE);
-
-       dbus_uint32_t serial = 0;
-       if (!dbus_connection_send(conn, reply, &serial))
-          esyslog("dbus2vdr: %s.Get: out of memory while sending the reply", DBUS_VDR_SETUP_INTERFACE);
-       dbus_message_unref(reply);
+       g_variant_builder_add_value(builder, g_variant_builder_end(variant));
+       g_variant_builder_add(builder, "i", replyCode);
+       g_variant_builder_add(builder, "s", *replyMessage);
+       g_dbus_method_invocation_return_value(Invocation, g_variant_builder_end(builder));
+       g_variant_builder_unref(builder);
+       g_variant_builder_unref(variant);
        return;
        }
 
-    cDBusHelper::SendReply(conn, msg, replyCode, replyMessage);
-  }
+    GVariantBuilder *builder = g_variant_builder_new(G_VARIANT_TYPE("(vis)"));
+    GVariantBuilder *variant = g_variant_builder_new(G_VARIANT_TYPE("v"));
+    g_variant_builder_add_value(variant, g_variant_new_string(""));
+    g_variant_builder_add_value(builder, g_variant_builder_end(variant));
+    g_variant_builder_add(builder, "i", replyCode);
+    g_variant_builder_add(builder, "s", *replyMessage);
+    g_dbus_method_invocation_return_value(Invocation, g_variant_builder_end(builder));
+    g_variant_builder_unref(builder);
+    g_variant_builder_unref(variant);
+  };
 
-  static void Set(DBusConnection* conn, DBusMessage* msg)
+  static void Set(cDBusObject *Object, GVariant *Parameters, GDBusMethodInvocation *Invocation)
   {
-    int rc;
-    const char *name = NULL;
-    DBusMessageIter args;
-    if (!dbus_message_iter_init(msg, &args))
-       esyslog("dbus2vdr: %s.Set: message misses an argument for the name", DBUS_VDR_SETUP_INTERFACE);
-    else {
-       rc = cDBusHelper::GetNextArg(args, DBUS_TYPE_STRING, &name);
-       if (rc < 0)
-          esyslog("dbus2vdr: %s.Set: 'name' argument is not a string", DBUS_VDR_SETUP_INTERFACE);
-       }
+    const gchar *name = NULL;
+    GVariant *nameChild = g_variant_get_child_value(Parameters, 0);
+    g_variant_get(nameChild, "&s", &name);
 
-    dbus_int32_t replyCode = 501;
+    GVariant *variant = g_variant_get_child_value(Parameters, 1);
+    GVariant *child = g_variant_get_child_value(variant, 0);
+
+    gint32 replyCode = 501;
     cString replyMessage = "missing arguments";
-    DBusMessageIter *refArgs = &args;
-    DBusMessageIter sub;
-    if (dbus_message_iter_get_arg_type(&args) == DBUS_TYPE_VARIANT) {
-       dbus_message_iter_recurse(&args, &sub);
-       refArgs = &sub;
-       }
     if (name != NULL) {
        cSetupBinding *b = cSetupBinding::Find(_bindings, name);
        if (b == NULL) {
           const char *value = NULL;
-          rc = cDBusHelper::GetNextArg(*refArgs, DBUS_TYPE_STRING, &value);
-          if (rc < 0)
+          if (!g_variant_is_of_type(child, G_VARIANT_TYPE_STRING))
              replyMessage = cString::sprintf("argument for %s is not a string", name);
           else {
+             g_variant_get(child, "&s", &value);
              cPlugin *plugin = NULL;
              char *dummy = NULL;
              char *pluginName = NULL;
@@ -521,7 +468,10 @@ public:
              if (dummy != NULL)
                 free(dummy);
              }
-          cDBusHelper::SendReply(conn, msg, replyCode, replyMessage);
+          cDBusHelper::SendReply(Invocation, replyCode, *replyMessage);
+          g_variant_unref(nameChild);
+          g_variant_unref(child);
+          g_variant_unref(variant);
           return;
           }
 
@@ -531,10 +481,10 @@ public:
          case cSetupBinding::dstString:
           {
            const char *str = NULL;
-           rc = cDBusHelper::GetNextArg(*refArgs, DBUS_TYPE_STRING, &str);
-           if (rc < 0)
+           if (!g_variant_is_of_type(child, G_VARIANT_TYPE_STRING))
               replyMessage = cString::sprintf("argument for %s is not a string", name);
            else {
+              g_variant_get(child, "&s", &str);
               replyMessage = cString::sprintf("setting %s = %s", name, str);
               Utf8Strn0Cpy((char*)b->Value, str, b->StrMaxLength);
               save = true;
@@ -566,17 +516,19 @@ public:
          case cSetupBinding::dstInt32:
           {
            int i32;
-           rc = cDBusHelper::GetNextArg(*refArgs, DBUS_TYPE_INT32, &i32);
-           if (rc < 0)
+           if (!g_variant_is_of_type(child, G_VARIANT_TYPE_INT32))
               replyMessage = cString::sprintf("argument for %s is not a 32bit-integer", name);
-           else if ((i32 < b->Int32MinValue) || (i32 > b->Int32MaxValue))
-              replyMessage = cString::sprintf("argument for %s is out of range", name);
            else {
-              replyMessage = cString::sprintf("setting %s = %d", name, i32);
-              (*((int*)b->Value)) = i32;
-              save = true;
-              if (strcasecmp(name, "AntiAlias") == 0) {
-                 ModifiedAppearance = true;
+              g_variant_get(child, "i", &i32);
+              if ((i32 < b->Int32MinValue) || (i32 > b->Int32MaxValue))
+                 replyMessage = cString::sprintf("argument for %s is out of range", name);
+              else {
+                 replyMessage = cString::sprintf("setting %s = %d", name, i32);
+                 (*((int*)b->Value)) = i32;
+                 save = true;
+                 if (strcasecmp(name, "AntiAlias") == 0) {
+                    ModifiedAppearance = true;
+                    }
                  }
               }
            break;
@@ -584,10 +536,10 @@ public:
          case cSetupBinding::dstTimeT:
           {
            time_t i64;
-           rc = cDBusHelper::GetNextArg(*refArgs, DBUS_TYPE_INT64, &i64);
-           if (rc < 0)
+           if (!g_variant_is_of_type(child, G_VARIANT_TYPE_INT64))
               replyMessage = cString::sprintf("argument for %s is not a 64bit-integer", name);
            else {
+              g_variant_get(child, "x", &i64);
               replyMessage = cString::sprintf("setting %s = %ld", name, i64);
               (*((time_t*)b->Value)) = i64;
               save = true;
@@ -606,17 +558,16 @@ public:
           }
        }
 
-    cDBusHelper::SendReply(conn, msg, replyCode, replyMessage);
-  }
+    cDBusHelper::SendReply(Invocation, replyCode, *replyMessage);
+    g_variant_unref(nameChild);
+    g_variant_unref(child);
+    g_variant_unref(variant);
+  };
 
-  static void Del(DBusConnection* conn, DBusMessage* msg)
+  static void Del(cDBusObject *Object, GVariant *Parameters, GDBusMethodInvocation *Invocation)
   {
-    const char *name = NULL;
-    if (!dbus_message_get_args(msg, NULL, DBUS_TYPE_STRING, &name, DBUS_TYPE_INVALID)) {
-       esyslog("dbus2vdr: %s.Del: message misses an argument for the name", DBUS_VDR_SETUP_INTERFACE);
-       cDBusHelper::SendReply(conn, msg, 501, "message misses an argument for the name");
-       return;
-       }
+    const gchar *name = NULL;
+    g_variant_get(Parameters, "(&s)", &name);
 
     isyslog("dbus2vdr: %s.Del: %s", DBUS_VDR_SETUP_INTERFACE, name);
 
@@ -635,7 +586,7 @@ public:
              line = next;
              }
        Setup.Save();
-       cDBusHelper::SendReply(conn, msg, 900, *cString::sprintf("deleted all settings for plugin %s", plugin));
+       cDBusHelper::SendReply(Invocation, 900, *cString::sprintf("deleted all settings for plugin %s", plugin));
        free(plugin);
        return;
        }
@@ -643,7 +594,7 @@ public:
     cSetupLine delLine;
     if (!delLine.Parse((char*)*cString::sprintf("%s=", name))) {
        esyslog("dbus2vdr: %s.Del: can't parse %s", DBUS_VDR_SETUP_INTERFACE, name);
-       cDBusHelper::SendReply(conn, msg, 501, *cString::sprintf("can't parse %s", name));
+       cDBusHelper::SendReply(Invocation, 501, *cString::sprintf("can't parse %s", name));
        return;
        }
 
@@ -651,63 +602,56 @@ public:
         if (line->Compare(delLine) == 0) {
            Setup.Del(line);
            Setup.Save();
-           cDBusHelper::SendReply(conn, msg, 900, *cString::sprintf("%s deleted from setup.conf", name));
+           cDBusHelper::SendReply(Invocation, 900, *cString::sprintf("%s deleted from setup.conf", name));
            return;
            }
         }
 
-    cDBusHelper::SendReply(conn, msg, 550, *cString::sprintf("%s not found in setup.conf", name));
-  }
+    cDBusHelper::SendReply(Invocation, 550, *cString::sprintf("%s not found in setup.conf", name));
+  };
 };
 
-cList<cDBusSetupActions::cSetupBinding> cDBusSetupActions::_bindings;
+cList<cDBusSetupHelper::cSetupBinding> cDBusSetupHelper::_bindings;
+
+const char *cDBusSetupHelper::_xmlNodeInfo = 
+    "<!DOCTYPE node PUBLIC \"-//freedesktop//DTD D-BUS Object Introspection 1.0//EN\"\n"
+    "       \"http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd\">\n"
+    "<node>\n"
+    "  <interface name=\""DBUS_VDR_SETUP_INTERFACE"\">\n"
+    "    <method name=\"List\">\n"
+    "      <arg name=\"key_value_list\" type=\"a(sv)\" direction=\"out\"/>\n"
+    "    </method>\n"
+    "    <method name=\"Get\">\n"
+    "      <arg name=\"name\"         type=\"s\" direction=\"in\"/>\n"
+    "      <arg name=\"value\"        type=\"v\" direction=\"out\"/>\n"
+    "      <arg name=\"replycode\"    type=\"i\" direction=\"out\"/>\n"
+    "      <arg name=\"replymessage\" type=\"s\" direction=\"out\"/>\n"
+    "    </method>\n"
+    "    <method name=\"Set\">\n"
+    "      <arg name=\"name\"         type=\"s\" direction=\"in\"/>\n"
+    "      <arg name=\"value\"        type=\"v\" direction=\"in\"/>\n"
+    "      <arg name=\"replycode\"    type=\"i\" direction=\"out\"/>\n"
+    "      <arg name=\"replymessage\" type=\"s\" direction=\"out\"/>\n"
+    "    </method>\n"
+    "    <method name=\"Del\">\n"
+    "      <arg name=\"name\"         type=\"s\" direction=\"in\"/>\n"
+    "      <arg name=\"replycode\"    type=\"i\" direction=\"out\"/>\n"
+    "      <arg name=\"replymessage\" type=\"s\" direction=\"out\"/>\n"
+    "    </method>\n"
+    "  </interface>\n"
+    "</node>\n";
 
 
-cDBusDispatcherSetup::cDBusDispatcherSetup(void)
-:cDBusMessageDispatcher(busSystem, DBUS_VDR_SETUP_INTERFACE)
+cDBusSetup::cDBusSetup(void)
+:cDBusObject("/Setup", cDBusSetupHelper::_xmlNodeInfo)
 {
-  cDBusSetupActions::InitBindings();
-  AddPath("/Setup");
-  AddAction("List", cDBusSetupActions::List);
-  AddAction("Get", cDBusSetupActions::Get);
-  AddAction("Set", cDBusSetupActions::Set);
-  AddAction("Del", cDBusSetupActions::Del);
+  cDBusSetupHelper::InitBindings();
+  AddMethod("List", cDBusSetupHelper::List);
+  AddMethod("Get", cDBusSetupHelper::Get);
+  AddMethod("Set", cDBusSetupHelper::Set);
+  AddMethod("Del", cDBusSetupHelper::Del);
 }
 
-cDBusDispatcherSetup::~cDBusDispatcherSetup(void)
+cDBusSetup::~cDBusSetup(void)
 {
-}
-
-bool          cDBusDispatcherSetup::OnIntrospect(DBusMessage *msg, cString &Data)
-{
-  if (strcmp(dbus_message_get_path(msg), "/Setup") != 0)
-     return false;
-  Data =
-  "<!DOCTYPE node PUBLIC \"-//freedesktop//DTD D-BUS Object Introspection 1.0//EN\"\n"
-  "       \"http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd\">\n"
-  "<node>\n"
-  "  <interface name=\""DBUS_VDR_SETUP_INTERFACE"\">\n"
-  "    <method name=\"List\">\n"
-  "      <arg name=\"key_value_list\" type=\"a(sv)\" direction=\"out\"/>\n"
-  "    </method>\n"
-  "    <method name=\"Get\">\n"
-  "      <arg name=\"name\"         type=\"s\" direction=\"in\"/>\n"
-  "      <arg name=\"value\"        type=\"v\" direction=\"out\"/>\n"
-  "      <arg name=\"replycode\"    type=\"i\" direction=\"out\"/>\n"
-  "      <arg name=\"replymessage\" type=\"s\" direction=\"out\"/>\n"
-  "    </method>\n"
-  "    <method name=\"Set\">\n"
-  "      <arg name=\"name\"         type=\"s\" direction=\"in\"/>\n"
-  "      <arg name=\"value\"        type=\"v\" direction=\"in\"/>\n"
-  "      <arg name=\"replycode\"    type=\"i\" direction=\"out\"/>\n"
-  "      <arg name=\"replymessage\" type=\"s\" direction=\"out\"/>\n"
-  "    </method>\n"
-  "    <method name=\"Del\">\n"
-  "      <arg name=\"name\"         type=\"s\" direction=\"in\"/>\n"
-  "      <arg name=\"replycode\"    type=\"i\" direction=\"out\"/>\n"
-  "      <arg name=\"replymessage\" type=\"s\" direction=\"out\"/>\n"
-  "    </method>\n"
-  "  </interface>\n"
-  "</node>\n";
-  return true;
 }

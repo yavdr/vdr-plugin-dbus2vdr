@@ -63,14 +63,20 @@ Commandline Arguments
 -o, --osd
         creates an OSD-provider which will save the OSD as PNG files
         (see comments below at section "OSD")
+--systemd
+        use sd_notify to notify systemd
 -u, --upstart
         enable Upstart started/stopped events
--p, --poll-timeout
-        timeout in milliseconds for dbus_connection_read_write_dispatch
-        default: 10ms
-        lower values may cause higher cpu load but will increase speed of reaction
 -n, --network
-        enable network support (see comments below at section "Network")
+        enable network support
+        (see comments below at section "Network")
+--session
+        connect to the session D-Bus daemon
+--no-system
+        don't connect to the system D-Bus daemon
+--no-mainloop
+        don't start GMainLoop
+        (don't use this option if you don't understand)
 
 Interface "channel"
 -------------------
@@ -81,7 +87,7 @@ Interface "channel"
   vdr-dbus-send.sh /Channels channel.GetFromTo int32:from_index int32:to_index
 
 - list channels like SVDRP command CHAN
-  vdr-dbus-send.sh /Channels channel.List [string:'[ :groups | <number> | <name> | <id> ]']
+  vdr-dbus-send.sh /Channels channel.List string:'[ :groups | <number> | <name> | <id> ]'
 
   The returned array contains the channel number and the string from the channels.conf.
 
@@ -93,7 +99,7 @@ Interface "epg"
 - enable EIT scanner
   vdr-dbus-send.sh /EPG epg.EnableScanner
 
-- clear EPG data with optional value for inactivity timeout of eit-scanner (default: 10)
+- clear EPG data with a value for inactivity timeout of eit-scanner (default: 10)
   vdr-dbus-send.sh /EPG epg.ClearEPG string:'channel' int32:10
 
 - add EPG entry
@@ -104,10 +110,10 @@ Interface "epg"
 - read EPG data from file
   vdr-dbus-send.sh /EPG epg.PutFile string:'/path/to/epg/data'
 
-- get current or next event of given or all channels
-  vdr-dbus-send.sh /EPG epg.Now [string:'channel']
-  vdr-dbus-send.sh /EPG epg.Next [string:'channel']
-  vdr-dbus-send.sh /EPG epg.At [string:'channel'] uint64:time
+- get current or next event of given or all channels if string is empty
+  vdr-dbus-send.sh /EPG epg.Now string:'channel'
+  vdr-dbus-send.sh /EPG epg.Next string:'channel'
+  vdr-dbus-send.sh /EPG epg.At string:'channel' uint64:time
 
   The events are returned as an array of structs.
   Each struct contains a string as a key and a variant as its value.
@@ -128,16 +134,21 @@ Interface "epg"
 
 Interface "plugin"
 ------------------
+If a plugin's name contains a hyphen, it will be replaced with an underscore in its
+object-path, e.g. streamdev-server will be found at /Plugins/streamdev_server.
+
 - send SVDRP commands to plugins
   vdr-dbus-send.sh /Plugins/<pluginname> plugin.SVDRPCommand string:'command' string:'parameter'
 
-If the SVDRP command doesn't take a parameter you can ommit it or pass an empty string.
+If the SVDRP command doesn't take a parameter you must pass an empty string.
 
 - call Service method of plugins
   vdr-dbus-send.sh /Plugins/<pluginname> plugin.Service string:'id' string:'data'
 
+Interface "pluginmanager"
+------------------
 - list all loaded plugins
-  vdr-dbus-send.sh /Plugins plugin.List
+  vdr-dbus-send.sh /Plugins pluginmanager.List
   You'll get an array of structs containing two strings, the name and the version of the plugins.
 
 Interface "recording"
@@ -175,6 +186,25 @@ Interface "recording"
   
   If framenumber is -1, playing is resumed at the last saved position.
 
+If your vdr is patched with the "extra video directories" patch there are also the following methods.
+
+- add extra video directory
+  vdr-dbus-send.sh /Recordings recording.AddExtraVideoDirectory string:directory
+
+  Don't forget to manually update your recordings after adding all directories.
+
+- clear extra video directories list
+  vdr-dbus-send.sh /Recordings recording.ClearExtraVideoDirectories
+
+- delete an extra video directory
+  vdr-dbus-send.sh /Recordings recording.DeleteExtraVideoDirectory string:directory
+
+- list all extra video directories
+  vdr-dbus-send.sh /Recordings recording.ListExtraVideoDirectories
+
+  Besides the usual reply-code and -message you get an array of strings with the
+  currently present video directories.
+
 Interface "remote"
 ------------------
 - enable/disable the remote
@@ -183,7 +213,8 @@ Interface "remote"
   vdr-dbus-send.sh /Remote remote.Status
 
 - hit a key, you may specify more than one key
-  vdr-dbus-send.sh /Remote remote.HitKey string:'Menu' string:'Down' string:'Down' ...
+  vdr-dbus-send.sh /Remote remote.HitKey string:'Menu'
+  vdr-dbus-send.sh /Remote remote.HitKeys array:string:'Menu','Down','Down','Ok',...
 
 - display list of strings on the osd and let the user select one
   vdr-dbus-send.sh /Remote remote.AskUser string:'title' array:string:'item 1','item 2',...
@@ -196,7 +227,7 @@ Interface "remote"
   vdr-dbus-send.sh /Remote remote.CallPlugin string:'name-of-plugin'
 
 - switch channel like SVDRP command CHAN
-  vdr-dbus-send.sh /Remote remote.SwitchChannel [string:'[ + | - | <number> | <name> | <id> ]']
+  vdr-dbus-send.sh /Remote remote.SwitchChannel string:'[ + | - | <number> | <name> | <id> ]'
 
 - get/set volume like SVDRP command VOLU
   vdr-dbus-send.sh /Remote remote.GetVolume
@@ -254,7 +285,7 @@ is stored in the setup.conf. You may need to restart vdr.
 Interface "shutdown"
 --------------------
 - ask vdr if it is ready for shutdown
-  vdr-dbus-send.sh /Shutdown shutdown.ConfirmShutdown [boolean:true]
+  vdr-dbus-send.sh /Shutdown shutdown.ConfirmShutdown boolean:true
   possible reply codes:
     250: vdr is ready for shutdown
     550: vdr is not ready for shutdown (unknown reason)
@@ -273,7 +304,7 @@ Interface "shutdown"
   If SHUTDOWNCMD is given use this command for shutdown.
   'shutdown-wrapper' is a tool which calls the shutdown-hooks.
   If the hooks need elevated privileges set the SUID bit of the wrapper accordingly.
-  The optional boolean argument "ignoreuser" will ignore user activity. This may be
+  The boolean argument "ignoreuser" will ignore user activity. This may be
   useful for external frontends like XBMC etc..
 
 - ask if vdr was started manually
@@ -298,6 +329,29 @@ Interface "skin"
   vdr-dbus-send.sh /Skin skin.CurrentSkin
   You will get the index, name and description.
 
+- set the current skin
+  vdr-dbus-send.sh /Skin skin.SetSkin string:'name'
+
+Interface "status"
+------------------
+Via the status interface the signals from vdr's cStatus class will be emitted
+
+- "ChannelSwitch"
+    int32  DeviceNumber
+    int32  ChannelNumber
+    bool   LiveView
+
+- "Recording"
+    int32  DeviceNumber
+    string Name
+    string FileName
+    bool   On
+
+- "Replaying"
+    string Name
+    string FileName
+    bool   On
+
 Interface "timer"
 -----------------
 - list all timers
@@ -313,6 +367,12 @@ Interface "timer"
     uint64  starttime in seconds since epoch (time_t format)
     uint64  stoptime in seconds since epoch (time_t format)
     string  title of the event
+
+- add new timer
+  vdr-dbus-send.sh /Timers timer.New string:'timer'
+
+- delete a timer
+  vdr-dbus-send.sh /Timers timer.Delete int32:number
 
 Interface "vdr"
 -----------------
@@ -342,8 +402,7 @@ etc/network.conf. There's also a sample Upstart job at etc/dbus2vdr.conf.
 This job should run as a user job, not as a system job, since it's
 reachable from the net.
 Interfaces must explicitly be enabled to listen on the network monitor.
-For now a subset of the timer interface is implemented. It is used to
-distribute timers around the vdr on the same subset.
+For now a subset of the status, timer and recording interface is implemented.
 (work in progress, must be documented...)
 
 OSD

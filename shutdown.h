@@ -1,34 +1,27 @@
 #ifndef __DBUS2VDR_SHUTDOWN_H
 #define __DBUS2VDR_SHUTDOWN_H
 
-#include "message.h"
+#include "object.h"
 
 
-class cDBusShutdownActions
+class cDBusShutdownHelper;
+
+class cDBusShutdown : public cDBusObject
 {
-public:
-  static void SetShutdownHooksDir(const char *Dir);
-  static void SetShutdownHooksWrapper(const char *Wrapper);
-
-  static void ConfirmShutdown(DBusConnection* conn, DBusMessage* msg);
-  static void ManualStart(DBusConnection* conn, DBusMessage* msg);
-  static void SetUserInactive(DBusConnection* conn, DBusMessage* msg);
+friend class cDBusShutdownHelper;
 
 private:
   static cString  _shutdownHooksDir;
   static cString  _shutdownHooksWrapper;
-};
 
-class cDBusDispatcherShutdown : public cDBusMessageDispatcher
-{
 public:
   static time_t StartupTime;
 
-  cDBusDispatcherShutdown(void);
-  virtual ~cDBusDispatcherShutdown(void);
+  static void SetShutdownHooksDir(const char *Dir);
+  static void SetShutdownHooksWrapper(const char *Wrapper);
 
-protected:
-  virtual bool          OnIntrospect(DBusMessage *msg, cString &Data);
+  cDBusShutdown(void);
+  virtual ~cDBusShutdown(void);
 };
 
 #endif

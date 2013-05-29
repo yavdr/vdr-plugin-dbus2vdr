@@ -9,35 +9,51 @@
 #include <getopt.h>
 #include <signal.h>
 
+#include <dbus/dbus.h>
+#include <glib-object.h>
+
 #include "common.h"
+#include "connection.h"
 #include "channel.h"
 #include "epg.h"
 #include "helper.h"
+#include "network.h"
 #include "plugin.h"
-#include "monitor.h"
 #include "osd.h"
 #include "recording.h"
 #include "remote.h"
+#include "sd-daemon.h"
 #include "setup.h"
 #include "shutdown.h"
 #include "skin.h"
+#include "status.h"
 #include "timer.h"
+#include "upstart.h"
 #include "vdr.h"
 
 #include <vdr/osdbase.h>
 #include <vdr/plugin.h>
 
-static const char *VERSION        = "10";
+static const char *VERSION        = "11";
 static const char *DESCRIPTION    = trNOOP("control vdr via D-Bus");
 static const char *MAINMENUENTRY  = NULL;
 
 class cPluginDbus2vdr : public cPlugin {
 private:
   // Add any member variables or functions you may need here.
+  bool enable_mainloop;
   bool enable_osd;
   int  send_upstart_signals;
+  bool enable_systemd;
+  bool enable_system;
+  bool enable_session;
   bool enable_network;
   bool first_main_thread;
+
+  cDBusMainLoop   *main_loop;
+  cDBusConnection *system_bus;
+  cDBusConnection *session_bus;
+  cDBusNetwork    *network_handler;
 
 public:
   cPluginDbus2vdr(void);
@@ -67,10 +83,19 @@ cPluginDbus2vdr::cPluginDbus2vdr(void)
   // Initialize any member variables here.
   // DON'T DO ANYTHING ELSE THAT MAY HAVE SIDE EFFECTS, REQUIRE GLOBAL
   // VDR OBJECTS TO EXIST OR PRODUCE ANY OUTPUT!
+  enable_mainloop = true;
   enable_osd = false;
   send_upstart_signals = -1;
+  enable_systemd = false;
+  enable_system = true;
+  enable_session = false;
   enable_network = false;
   first_main_thread = true;
+  g_type_init();
+  main_loop = NULL;
+  system_bus = NULL;
+  session_bus = NULL;
+  network_handler = NULL;
 }
 
 cPluginDbus2vdr::~cPluginDbus2vdr()
@@ -87,10 +112,16 @@ const char *cPluginDbus2vdr::CommandLineHelp(void)
          "    path to a program that will call the shutdown-hooks with suid\n"
          "  --osd\n"
          "    creates an OSD provider which will save the OSD as PNG files\n"
+         "  --systemd\n"
+         "    use sd_notify to notify systemd\n"
          "  --upstart\n"
          "    enable Upstart started/stopped events\n"
-         "  --poll-timeout\n"
-         "    timeout in milliseconds for dbus_connection_read_write_dispatch\n"
+         "  --session\n"
+         "    connect to session D-Bus daemon\n"
+         "  --no-system\n"
+         "    don't connect to system D-Bus daemon\n"
+         "  --no-mainloop\n"
+         "    don't start GMainLoop (don't use this option if you don't understand)\n"
          "  --network\n"
          "    enable network support for peer2peer communication\n"
          "    a local dbus-daemon has to be started manually\n"
@@ -105,8 +136,11 @@ bool cPluginDbus2vdr::ProcessArgs(int argc, char *argv[])
     {"shutdown-hooks-wrapper", required_argument, 0, 'w'},
     {"osd", no_argument, 0, 'o'},
     {"upstart", no_argument, 0, 'u'},
-    {"poll-timeout", required_argument, 0, 'p'},
+    {"session", no_argument, 0, 's' | 0x100},
+    {"no-system", no_argument, 0, 's' | 0x200},
+    {"systemd", no_argument, 0, 's' | 0x400},
     {"network", no_argument, 0, 'n'},
+    {"no-mainloop", no_argument, 0, 'n' | 0x100},
     {0, 0, 0, 0}
   };
 
@@ -126,8 +160,26 @@ bool cPluginDbus2vdr::ProcessArgs(int argc, char *argv[])
            {
              if (optarg != NULL) {
                 isyslog("dbus2vdr: use shutdown-hooks in %s", optarg);
-                cDBusShutdownActions::SetShutdownHooksDir(optarg);
+                cDBusShutdown::SetShutdownHooksDir(optarg);
                 }
+             break;
+           }
+          case 's' | 0x100:
+           {
+             enable_session = true;
+             isyslog("dbus2vdr: enable session-bus");
+             break;
+           }
+          case 's' | 0x200:
+           {
+             enable_system = false;
+             isyslog("dbus2vdr: disable system-bus support");
+             break;
+           }
+          case 's' | 0x400:
+           {
+             enable_systemd = true;
+             isyslog("dbus2vdr: enable systemd notify support");
              break;
            }
           case 'u':
@@ -140,15 +192,7 @@ bool cPluginDbus2vdr::ProcessArgs(int argc, char *argv[])
            {
              if (optarg != NULL) {
                 isyslog("dbus2vdr: use shutdown-hooks-wrapper %s", optarg);
-                cDBusShutdownActions::SetShutdownHooksWrapper(optarg);
-                }
-             break;
-           }
-          case 'p':
-           {
-             if ((optarg != NULL) && isnumber(optarg)) {
-                isyslog("dbus2vdr: use poll-timeout %s", optarg);
-                cDBusMonitor::PollTimeoutMs = strtol(optarg, NULL, 10);
+                cDBusShutdown::SetShutdownHooksWrapper(optarg);
                 }
              break;
            }
@@ -156,6 +200,12 @@ bool cPluginDbus2vdr::ProcessArgs(int argc, char *argv[])
            {
              enable_network = true;
              isyslog("dbus2vdr: enable network support");
+             break;
+           }
+          case 'n' | 0x100:
+           {
+             enable_mainloop = false;
+             isyslog("dbus2vdr: disable mainloop");
              break;
            }
           }
@@ -168,51 +218,100 @@ bool cPluginDbus2vdr::Initialize(void)
   // Initialize any background activities the plugin shall perform.
   if (!dbus_threads_init_default())
      esyslog("dbus2vdr: dbus_threads_init_default returns an error - not good!");
-  cDBusDispatcherShutdown::StartupTime = time(NULL);
+  cDBusShutdown::StartupTime = time(NULL);
   return true;
+}
+
+static void AddAllObjects(cDBusConnection *Connection, bool EnableOSD)
+{
+  Connection->AddObject(new cDBusChannels);
+  Connection->AddObject(new cDBusEpg);
+  if (EnableOSD)
+     Connection->AddObject(new cDBusOsdObject);
+  cDBusPlugin::AddAllPlugins(Connection);
+  Connection->AddObject(new cDBusPluginManager);
+  Connection->AddObject(new cDBusRecordings);
+  Connection->AddObject(new cDBusRemote);
+  Connection->AddObject(new cDBusSetup);
+  Connection->AddObject(new cDBusShutdown);
+  Connection->AddObject(new cDBusSkin);
+  Connection->AddObject(new cDBusStatus(false));
+  Connection->AddObject(new cDBusTimers);
+  Connection->AddObject(new cDBusVdr);
 }
 
 bool cPluginDbus2vdr::Start(void)
 {
   cDBusHelper::SetConfigDirectory(cPlugin::ConfigDirectory("dbus2vdr"));
   // Start any background activities the plugin shall perform.
-  new cDBusDispatcherChannel;
-  new cDBusDispatcherEpg;
-  new cDBusDispatcherOsd;
-  new cDBusDispatcherPlugin;
-  new cDBusDispatcherRecording;
-  new cDBusDispatcherRemote;
-  new cDBusDispatcherSetup;
-  new cDBusDispatcherShutdown;
-  new cDBusDispatcherSkin;
-  new cDBusDispatcherTimer;
-  new cDBusDispatcherVdr;
-  if (enable_network) {
-     new cDBusDispatcherRecordingConst(busNetwork);
-     new cDBusDispatcherTimerConst(busNetwork);
-     }
-  cDBusMonitor::StartMonitor(enable_network);
-  if (enable_osd)
-     new cDBusOsdProvider();
+  if (enable_mainloop)
+     main_loop = new cDBusMainLoop(NULL);
 
-  cDBusDispatcherVdr::SetStatus(cDBusDispatcherVdr::statusStart);
+  cString busname;
+#if VDRVERSNUM < 10704
+  busname = cString::sprintf("%s", DBUS_VDR_BUSNAME);
+#else
+  if (InstanceId > 0)
+     busname = cString::sprintf("%s%d", DBUS_VDR_BUSNAME, InstanceId);
+  else
+     busname = cString::sprintf("%s", DBUS_VDR_BUSNAME);
+#endif
+  if (enable_system) {
+     system_bus = new cDBusConnection(*busname, G_BUS_TYPE_SYSTEM, NULL);
+     AddAllObjects(system_bus, enable_osd);
+     system_bus->Connect(TRUE);
+     }
+
+  if (enable_session) {
+     session_bus = new cDBusConnection(*busname, G_BUS_TYPE_SESSION, NULL);
+     AddAllObjects(session_bus, enable_osd);
+     session_bus->Connect(TRUE);
+     }
+
+  if (enable_network) {
+     cString filename = cString::sprintf("%s/network-address.conf", cPlugin::ConfigDirectory(Name()));
+     network_handler = new cDBusNetwork(*busname, *filename, NULL);
+     network_handler->Start();
+     }
+
+  // emit status "Start" on the various notification channels
+  cDBusVdr::SetStatus(cDBusVdr::statusStart);
+  if (enable_systemd)
+     sd_notify(0, "STATUS=Start\n");
 
   return true;
 }
 
 void cPluginDbus2vdr::Stop(void)
 {
-  // Stop any background activities the plugin is performing.
+  cDBusRemote::MainMenuAction = NULL;
+
+  // emit status "Stop" on the various notification channels
+  if (enable_systemd)
+     sd_notify(0, "STATUS=Stop\n");
   if (send_upstart_signals == 1) {
      send_upstart_signals++;
-     cDBusMonitor::SendUpstartSignal("stopped");
+     cDBusUpstart::EmitPluginEvent(system_bus, "stopped");
      }
+  cDBusVdr::SetStatus(cDBusVdr::statusStop);
 
-  cDBusDispatcherVdr::SetStatus(cDBusDispatcherVdr::statusStop);
-
-  cDBusMonitor::StopUpstartSender();
-  cDBusMonitor::StopMonitor();
-  cDBusMessageDispatcher::Shutdown();
+  if (network_handler != NULL) {
+     delete network_handler;
+     network_handler = NULL;
+     }
+  if (session_bus != NULL) {
+     delete session_bus;
+     session_bus = NULL;
+     }
+  if (system_bus != NULL) {
+     delete system_bus;
+     system_bus = NULL;
+     }
+  cDBusObject::FreeThreadPool();
+  if (main_loop != NULL) {
+     delete main_loop;
+     main_loop = NULL;
+     }
 }
 
 void cPluginDbus2vdr::Housekeeping(void)
@@ -227,13 +326,15 @@ void cPluginDbus2vdr::MainThreadHook(void)
   if (first_main_thread) {
      first_main_thread = false;
 
-     cDBusDispatcherVdr::SetStatus(cDBusDispatcherVdr::statusReady);
-
+     // emit status "Ready" on the various notification channels
+     cDBusVdr::SetStatus(cDBusVdr::statusReady);
+     if (enable_systemd)
+        sd_notify(0, "READY=1\nSTATUS=Ready\n");
      if (send_upstart_signals == 0) {
         send_upstart_signals++;
         isyslog("dbus2vdr: raise SIGSTOP for Upstart");
         raise(SIGSTOP);
-        cDBusMonitor::SendUpstartSignal("started");
+        cDBusUpstart::EmitPluginEvent(system_bus, "started");
         }
      }
 }
@@ -253,7 +354,7 @@ time_t cPluginDbus2vdr::WakeupTime(void)
 cOsdObject *cPluginDbus2vdr::MainMenuAction(void)
 {
   // Perform the action when selected from the main VDR menu.
-  return cDBusDispatcherRemote::MainMenuAction;
+  return cDBusRemote::MainMenuAction;
 }
 
 cMenuSetupPage *cPluginDbus2vdr::SetupMenu(void)

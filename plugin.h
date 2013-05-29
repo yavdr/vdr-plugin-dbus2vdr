@@ -1,39 +1,23 @@
 #ifndef __DBUS2VDR_PLUGIN_H
 #define __DBUS2VDR_PLUGIN_H
 
-#include "message.h"
+#include "object.h"
 
 
-class cDBusMessagePlugin : public cDBusMessage
+class cDBusPlugin : public cDBusObject
 {
-friend class cDBusDispatcherPlugin;
-
 public:
-  enum eAction { dmpList, dmpSVDRPCommand, dmpService };
+  cDBusPlugin(const char *Path);
+  virtual ~cDBusPlugin(void);
 
-  virtual ~cDBusMessagePlugin(void);
-
-protected:
-  virtual void Process(void);
-
-private:
-  cDBusMessagePlugin(eAction action, DBusConnection* conn, DBusMessage* msg);
-  void List(void);
-  void SVDRPCommand(void);
-  void Service(void);
-
-  eAction _action;
+  static void AddAllPlugins(cDBusConnection *Connection);
 };
 
-class cDBusDispatcherPlugin : public cDBusMessageDispatcher
+class cDBusPluginManager : public cDBusObject
 {
 public:
-  cDBusDispatcherPlugin(void);
-  virtual ~cDBusDispatcherPlugin(void);
-
-protected:
-  virtual cDBusMessage *CreateMessage(DBusConnection* conn, DBusMessage* msg);
-  virtual bool          OnIntrospect(DBusMessage *msg, cString &Data);
+  cDBusPluginManager(void);
+  virtual ~cDBusPluginManager(void);
 };
 
 #endif

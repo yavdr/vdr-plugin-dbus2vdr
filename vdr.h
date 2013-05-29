@@ -1,25 +1,24 @@
 #ifndef __DBUS2VDR_VDR_H
 #define __DBUS2VDR_VDR_H
 
-#include "message.h"
+#include "object.h"
 
 
-class cDBusDispatcherVdr : public cDBusMessageDispatcher
+class cDBusVdr : public cDBusObject
 {
 public:
   enum eVdrStatus { statusUnknown = -1, statusStart = 0, statusReady = 1, statusStop = 2};
 
-  static void       SetStatus(eVdrStatus Status);
+  static bool       SetStatus(eVdrStatus Status);
   static eVdrStatus GetStatus(void);
 
-  cDBusDispatcherVdr(void);
-  virtual ~cDBusDispatcherVdr(void);
-
-protected:
-  virtual bool          OnIntrospect(DBusMessage *msg, cString &Data);
+  cDBusVdr(void);
+  virtual ~cDBusVdr(void);
 
 private:
-  static eVdrStatus  _status;
+  static eVdrStatus         _status;
+  static cVector<cDBusVdr*> _objects;
+  static cMutex             _objectsMutex;
 };
 
 #endif

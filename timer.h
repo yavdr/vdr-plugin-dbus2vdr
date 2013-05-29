@@ -1,27 +1,28 @@
 #ifndef __DBUS2VDR_TIMER_H
 #define __DBUS2VDR_TIMER_H
 
-#include "message.h"
+#include "object.h"
 
 
-class cDBusDispatcherTimerConst : public cDBusMessageDispatcher
+class cDBusTimers;
+
+class cDBusTimersConst : public cDBusObject
 {
-public:
-  cDBusDispatcherTimerConst(eBusType type);
-  virtual ~cDBusDispatcherTimerConst(void);
+friend class cDBusTimers;
 
-protected:
-  virtual bool          OnIntrospect(DBusMessage *msg, cString &Data);
+private:
+  cDBusTimersConst(const char *NodeInfo);
+
+public:
+  cDBusTimersConst(void);
+  virtual ~cDBusTimersConst(void);
 };
 
-class cDBusDispatcherTimer : public cDBusDispatcherTimerConst
+class cDBusTimers : public cDBusTimersConst
 {
 public:
-  cDBusDispatcherTimer(void);
-  virtual ~cDBusDispatcherTimer(void);
-
-protected:
-  virtual bool          OnIntrospect(DBusMessage *msg, cString &Data);
+  cDBusTimers(void);
+  virtual ~cDBusTimers(void);
 };
 
 #endif

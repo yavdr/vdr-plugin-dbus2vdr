@@ -1,27 +1,28 @@
 #ifndef __DBUS2VDR_RECORDING_H
 #define __DBUS2VDR_RECORDING_H
 
-#include "message.h"
+#include "object.h"
 
 
-class cDBusDispatcherRecordingConst : public cDBusMessageDispatcher
+class cDBusRecordings;
+
+class cDBusRecordingsConst : public cDBusObject
 {
-public:
-  cDBusDispatcherRecordingConst(eBusType type);
-  virtual ~cDBusDispatcherRecordingConst(void);
+friend class cDBusRecordings;
 
-protected:
-  virtual bool          OnIntrospect(DBusMessage *msg, cString &Data);
+private:
+  cDBusRecordingsConst(const char *NodeInfo);
+
+public:
+  cDBusRecordingsConst(void);
+  virtual ~cDBusRecordingsConst(void);
 };
 
-class cDBusDispatcherRecording : public cDBusDispatcherRecordingConst
+class cDBusRecordings : public cDBusRecordingsConst
 {
 public:
-  cDBusDispatcherRecording(void);
-  virtual ~cDBusDispatcherRecording(void);
-
-protected:
-  virtual bool          OnIntrospect(DBusMessage *msg, cString &Data);
+  cDBusRecordings(void);
+  virtual ~cDBusRecordings(void);
 };
 
 #endif

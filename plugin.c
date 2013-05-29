@@ -1,220 +1,166 @@
 #include "plugin.h"
 #include "common.h"
+#include "connection.h"
 #include "helper.h"
 
 #include <vdr/plugin.h>
 
 
-cDBusMessagePlugin::cDBusMessagePlugin(cDBusMessagePlugin::eAction action, DBusConnection* conn, DBusMessage* msg)
-:cDBusMessage(conn, msg)
-,_action(action)
+namespace cDBusPluginsHelper
+{
+  static const char *_xmlNodeInfoManager = 
+    "<!DOCTYPE node PUBLIC \"-//freedesktop//DTD D-BUS Object Introspection 1.0//EN\"\n"
+    "       \"http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd\">\n"
+    "<node>\n"
+    "  <interface name=\""DBUS_VDR_PLUGINMANAGER_INTERFACE"\">\n"
+    "    <method name=\"List\">\n"
+    "      <arg name=\"pluginlist\"   type=\"a(ss)\" direction=\"out\"/>\n"
+    "    </method>\n"
+    "  </interface>\n"
+    "  <interface name=\""DBUS_VDR_PLUGIN_INTERFACE"\">\n"
+    "    <method name=\"List\">\n"
+    "      <arg name=\"pluginlist\"   type=\"a(ss)\" direction=\"out\"/>\n"
+    "    </method>\n"
+    "  </interface>\n"
+    "</node>\n";
+
+  static const char *_xmlNodeInfoPlugin = 
+    "<!DOCTYPE node PUBLIC \"-//freedesktop//DTD D-BUS Object Introspection 1.0//EN\"\n"
+    "       \"http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd\">\n"
+    "<node>\n"
+    "  <interface name=\""DBUS_VDR_PLUGIN_INTERFACE"\">\n"
+    "    <method name=\"SVDRPCommand\">\n"
+    "      <arg name=\"command\"      type=\"s\" direction=\"in\"/>\n"
+    "      <arg name=\"option\"       type=\"s\" direction=\"in\"/>\n"
+    "      <arg name=\"replycode\"    type=\"i\" direction=\"out\"/>\n"
+    "      <arg name=\"replymessage\" type=\"s\" direction=\"out\"/>\n"
+    "    </method>\n"
+    "    <method name=\"Service\">\n"
+    "      <arg name=\"id\"           type=\"s\" direction=\"in\"/>\n"
+    "      <arg name=\"data\"         type=\"s\" direction=\"in\"/>\n"
+    "      <arg name=\"return\"       type=\"b\" direction=\"out\"/>\n"
+    "    </method>\n"
+    "  </interface>\n"
+    "</node>\n";
+
+  static void List(cDBusObject *Object, GVariant *Parameters, GDBusMethodInvocation *Invocation)
+  {
+    if (g_strcmp0(g_dbus_method_invocation_get_interface_name(Invocation), DBUS_VDR_PLUGIN_INTERFACE) == 0)
+       esyslog("dbus2vdr: use of deprecated interface: 'List' should be called with the interface '%s'!", DBUS_VDR_PLUGINMANAGER_INTERFACE);
+
+#define EMPTY(s) (s == NULL ? "" : s)
+    GVariantBuilder *array = g_variant_builder_new(G_VARIANT_TYPE("a(ss)"));
+    int index = 0;
+    do
+    {
+      cPlugin *plugin = cPluginManager::GetPlugin(index);
+      if (plugin == NULL)
+         break;
+      const char *name = plugin->Name();
+      const char *version = plugin->Version();
+      g_variant_builder_add(array, "(ss)", EMPTY(name), EMPTY(version));
+      index++;
+    } while (true);
+#undef EMPTY
+
+    GVariantBuilder *builder = g_variant_builder_new(G_VARIANT_TYPE("(a(ss))"));
+    g_variant_builder_add_value(builder, g_variant_builder_end(array));
+    g_dbus_method_invocation_return_value(Invocation, g_variant_builder_end(builder));
+    g_variant_builder_unref(array);
+    g_variant_builder_unref(builder);
+  }
+
+  static void SVDRPCommand(cDBusObject *Object, GVariant *Parameters, GDBusMethodInvocation *Invocation)
+  {
+    const char *pluginName = Object->Path();
+    const char *command = NULL;
+    const char *option = NULL;
+    g_variant_get(Parameters, "(&s&s)", &command, &option);
+
+    gint32  replyCode = 500;
+    cString replyMessage;
+    if ((pluginName != NULL) && (command != NULL)) {
+       if ((strlen(pluginName) > 9) && (strncmp(pluginName, "/Plugins/", 9) == 0)) {
+          cPlugin *plugin = cPluginManager::GetPlugin(pluginName + 9);
+          if (plugin != NULL) {
+             replyCode = 900;
+             cString s = plugin->SVDRPCommand(command, option, replyCode);
+             if (*s) {
+                replyMessage = s;
+                }
+             else {
+                replyCode = 500;
+                replyMessage = cString::sprintf("Command unrecognized: \"%s\"", command);
+                }
+             }
+          }
+       }
+
+    g_dbus_method_invocation_return_value(Invocation, g_variant_new("(is)", replyCode, *replyMessage));
+  }
+
+  static void Service(cDBusObject *Object, GVariant *Parameters, GDBusMethodInvocation *Invocation)
+  {
+    gboolean reply = FALSE;
+    const char *pluginName = Object->Path();
+    const char *id = NULL;
+    const char *data = NULL;
+    g_variant_get(Parameters, "(&s&s)", &id, &data);
+
+    if ((pluginName != NULL) && (id != NULL)) {
+       if ((strlen(pluginName) > 9) && (strncmp(pluginName, "/Plugins/", 9) == 0)) {
+          cPlugin *plugin = cPluginManager::GetPlugin(pluginName + 9);
+          if (plugin != NULL) {
+             if (data == NULL)
+                data = "";
+             if (plugin->Service(id, (void*)data))
+                reply = TRUE;
+             }
+          }
+       }
+
+    g_dbus_method_invocation_return_value(Invocation, g_variant_new("(b)", reply));
+  }
+}
+
+cDBusPlugin::cDBusPlugin(const char *Path)
+:cDBusObject(Path, cDBusPluginsHelper::_xmlNodeInfoPlugin)
+{
+  AddMethod("List", cDBusPluginsHelper::List);
+  AddMethod("SVDRPCommand", cDBusPluginsHelper::SVDRPCommand);
+  AddMethod("Service", cDBusPluginsHelper::Service);
+}
+
+cDBusPlugin::~cDBusPlugin(void)
 {
 }
 
-cDBusMessagePlugin::~cDBusMessagePlugin(void)
+void cDBusPlugin::AddAllPlugins(cDBusConnection *Connection)
 {
-}
-
-void cDBusMessagePlugin::Process(void)
-{
-  switch (_action) {
-    case dmpList:
-      List();
-      break;
-    case dmpSVDRPCommand:
-      SVDRPCommand();
-      break;
-    case dmpService:
-      Service();
-      break;
-    }
-}
-
-void cDBusMessagePlugin::List(void)
-{
-  DBusMessage *reply = dbus_message_new_method_return(_msg);
-  DBusMessageIter args;
-  dbus_message_iter_init_append(reply, &args);
-
-  DBusMessageIter array;
-  if (!dbus_message_iter_open_container(&args, DBUS_TYPE_ARRAY, "(ss)", &array))
-     esyslog("dbus2vdr: %s.List: can't open array container", DBUS_VDR_PLUGIN_INTERFACE);
-
-  DBusMessageIter struc;
-  cPlugin *plugin = NULL;
-  for (int p = 0; (plugin = cPluginManager::GetPlugin(p)) != NULL; p++) {
-      if (!dbus_message_iter_open_container(&array, DBUS_TYPE_STRUCT, NULL, &struc))
-         esyslog("dbus2vdr: %s.List: can't open struct container", DBUS_VDR_PLUGIN_INTERFACE);
-      else {
-         const char *name = plugin->Name();
-         cDBusHelper::AddArg(struc, DBUS_TYPE_STRING, &name);
-         const char *version = plugin->Version();
-         cDBusHelper::AddArg(struc, DBUS_TYPE_STRING, &version);
-         if (!dbus_message_iter_close_container(&array, &struc))
-            esyslog("dbus2vdr: %s.List: can't close struct container", DBUS_VDR_PLUGIN_INTERFACE);
-         }
-      }
-
-  if (!dbus_message_iter_close_container(&args, &array))
-     esyslog("dbus2vdr: %s.List: can't close array container", DBUS_VDR_PLUGIN_INTERFACE);
-
-  dbus_uint32_t serial = 0;
-  if (!dbus_connection_send(_conn, reply, &serial))
-     esyslog("dbus2vdr: %s.List: out of memory while sending the reply", DBUS_VDR_PLUGIN_INTERFACE);
-  dbus_message_unref(reply);
-}
-
-void cDBusMessagePlugin::SVDRPCommand(void)
-{
-  const char *pluginName = dbus_message_get_path(_msg);
-  const char *command = NULL;
-  const char *option = NULL;
-  DBusMessageIter args;
-  if (!dbus_message_iter_init(_msg, &args))
-     esyslog("dbus2vdr: %s.SVDRPCommand: message misses an argument for the command", DBUS_VDR_PLUGIN_INTERFACE);
-  else {
-     int rc = cDBusHelper::GetNextArg(args, DBUS_TYPE_STRING, &command);
-     if (rc < 0)
-        esyslog("dbus2vdr: %s.SVDRPCommand: 'command' argument is not a string", DBUS_VDR_PLUGIN_INTERFACE);
-     else if (rc == 0)
-        isyslog("dbus2vdr: %s.SVDRPCommand: command '%s' has no option", DBUS_VDR_PLUGIN_INTERFACE, command);
-     else if (cDBusHelper::GetNextArg(args, DBUS_TYPE_STRING, &option) < 0)
-        esyslog("dbus2vdr: %s.SVDRPCommand: 'option' argument is not string", DBUS_VDR_PLUGIN_INTERFACE);
-     }
-
-  dbus_int32_t replyCode = 500;
-  cString replyMessage;
-  if ((pluginName != NULL) && (command != NULL)) {
-     if ((strlen(pluginName) > 9) && (strncmp(pluginName, "/Plugins/", 9) == 0)) {
-        cPlugin *plugin = cPluginManager::GetPlugin(pluginName + 9);
-        if (plugin != NULL) {
-           if (option == NULL)
-              option = "";
-           isyslog("dbus2vdr: invoking %s.SVDRPCommand(\"%s\", \"%s\")", plugin->Name(), command, option);
-           replyCode = 900;
-           cString s = plugin->SVDRPCommand(command, option, replyCode);
-           if (*s) {
-              replyMessage = s;
-              }
-           else {
-              replyCode = 500;
-              replyMessage = cString::sprintf("Command unrecognized: \"%s\"", command);
-              }
-           }
+  int index = 0;
+  do
+  {
+    cPlugin *plugin = cPluginManager::GetPlugin(index);
+    if (plugin == NULL)
+       break;
+    gchar *path = g_strconcat("/Plugins/", plugin->Name(), NULL);
+    for (int i = 0; path[i] != 0; i++) {
+        if (path[i] == '-')
+           path[i] = '_';
         }
-     }
-
-  DBusMessage *reply = dbus_message_new_method_return(_msg);
-  dbus_message_iter_init_append(reply, &args);
-
-  if (!dbus_message_iter_append_basic(&args, DBUS_TYPE_INT32, &replyCode))
-     esyslog("dbus2vdr: %s.SVDRPCommand: out of memory while appending the reply-code", DBUS_VDR_PLUGIN_INTERFACE);
-
-  if (*replyMessage == NULL)
-     replyMessage = "";
-  const char *message = *replyMessage;
-  if (!dbus_message_iter_append_basic(&args, DBUS_TYPE_STRING, &message))
-     esyslog("dbus2vdr: %s.SVDRPCommand: out of memory while appending the reply-message", DBUS_VDR_PLUGIN_INTERFACE);
-
-  dbus_uint32_t serial = 0;
-  if (!dbus_connection_send(_conn, reply, &serial))
-     esyslog("dbus2vdr: %s.SVDRPCommand: out of memory while sending the reply", DBUS_VDR_PLUGIN_INTERFACE);
-  dbus_message_unref(reply);
-}
-
-void cDBusMessagePlugin::Service(void)
-{
-  const char *pluginName = dbus_message_get_path(_msg);
-  const char *id = NULL;
-  const char *data = NULL;
-  DBusMessageIter args;
-  if (!dbus_message_iter_init(_msg, &args))
-     esyslog("dbus2vdr: %s.Service: message misses an argument for the id", DBUS_VDR_PLUGIN_INTERFACE);
-  else {
-     int rc = cDBusHelper::GetNextArg(args, DBUS_TYPE_STRING, &id);
-     if (rc < 0)
-        esyslog("dbus2vdr: %s.Service: 'id' argument is not a string", DBUS_VDR_PLUGIN_INTERFACE);
-     else if (rc == 0)
-        isyslog("dbus2vdr: %s.Service: id '%s' has no data", DBUS_VDR_PLUGIN_INTERFACE, id);
-     else if (cDBusHelper::GetNextArg(args, DBUS_TYPE_STRING, &data) < 0)
-        esyslog("dbus2vdr: %s.Service: 'data' argument is not string", DBUS_VDR_PLUGIN_INTERFACE);
-     }
-
-  if ((pluginName != NULL) && (id != NULL)) {
-     if ((strlen(pluginName) > 9) && (strncmp(pluginName, "/Plugins/", 9) == 0)) {
-        cPlugin *plugin = cPluginManager::GetPlugin(pluginName + 9);
-        if (plugin != NULL) {
-           if (data == NULL)
-              data = "";
-           isyslog("dbus2vdr: invoking %s.Service(\"%s\", \"%s\")", plugin->Name(), id, data);
-           if (!plugin->Service(id, (void*)data)) {
-              cString message = cString::sprintf("%s.Service(\"%s\", \"%s\") returns false", plugin->Name(), id, data);
-              esyslog("dbus2vdr: %s", *message);
-              cDBusHelper::SendReply(_conn, _msg, -1, *message);
-              return;
-              }
-           }
-        }
-     }
-
-  cDBusHelper::SendReply(_conn, _msg, 0, "");
+    Connection->AddObject(new cDBusPlugin(path));
+    g_free(path);
+    index++;
+  } while (true);
 }
 
 
-cDBusDispatcherPlugin::cDBusDispatcherPlugin(void)
-:cDBusMessageDispatcher(busSystem, DBUS_VDR_PLUGIN_INTERFACE)
+cDBusPluginManager::cDBusPluginManager(void)
+:cDBusObject("/Plugins", cDBusPluginsHelper::_xmlNodeInfoManager)
 {
+  AddMethod("List", cDBusPluginsHelper::List);
 }
 
-cDBusDispatcherPlugin::~cDBusDispatcherPlugin(void)
+cDBusPluginManager::~cDBusPluginManager(void)
 {
-}
-
-cDBusMessage *cDBusDispatcherPlugin::CreateMessage(DBusConnection* conn, DBusMessage* msg)
-{
-  if ((conn == NULL) || (msg == NULL))
-     return NULL;
-
-  if (dbus_message_is_method_call(msg, DBUS_VDR_PLUGIN_INTERFACE, "List"))
-     return new cDBusMessagePlugin(cDBusMessagePlugin::dmpList, conn, msg);
-
-  if (dbus_message_is_method_call(msg, DBUS_VDR_PLUGIN_INTERFACE, "SVDRPCommand"))
-     return new cDBusMessagePlugin(cDBusMessagePlugin::dmpSVDRPCommand, conn, msg);
-
-  if (dbus_message_is_method_call(msg, DBUS_VDR_PLUGIN_INTERFACE, "Service"))
-     return new cDBusMessagePlugin(cDBusMessagePlugin::dmpService, conn, msg);
-
-  return NULL;
-}
-
-bool          cDBusDispatcherPlugin::OnIntrospect(DBusMessage *msg, cString &Data)
-{
-  if (strncmp(dbus_message_get_path(msg), "/Plugins/", 9) != 0)
-     return false;
-  Data =
-  "<!DOCTYPE node PUBLIC \"-//freedesktop//DTD D-BUS Object Introspection 1.0//EN\"\n"
-  "       \"http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd\">\n"
-  "<node>\n"
-  "  <interface name=\""DBUS_VDR_PLUGIN_INTERFACE"\">\n"
-  "    <method name=\"List\">\n"
-  "      <arg name=\"pluginlist\"   type=\"a(ss)\" direction=\"out\"/>\n"
-  "    </method>\n"
-  "    <method name=\"SVDRPCommand\">\n"
-  "      <arg name=\"command\"      type=\"s\" direction=\"in\"/>\n"
-  "      <arg name=\"option\"       type=\"s\" direction=\"in\"/>\n"
-  "      <arg name=\"replycode\"    type=\"i\" direction=\"out\"/>\n"
-  "      <arg name=\"replymessage\" type=\"s\" direction=\"out\"/>\n"
-  "    </method>\n"
-  "    <method name=\"Service\">\n"
-  "      <arg name=\"id\"           type=\"s\" direction=\"in\"/>\n"
-  "      <arg name=\"data\"         type=\"s\" direction=\"in\"/>\n"
-  "      <arg name=\"replycode\"    type=\"i\" direction=\"out\"/>\n"
-  "      <arg name=\"replymessage\" type=\"s\" direction=\"out\"/>\n"
-  "    </method>\n"
-  "    <signal name=\"Started\">\n"
-  "      <arg name=\"name\"  type=\"s\"/>\n"
-  "    </signal>\n"
-  "  </interface>\n"
-  "</node>\n";
-  return true;
 }

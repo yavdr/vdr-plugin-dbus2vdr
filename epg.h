@@ -1,17 +1,14 @@
 #ifndef __DBUS2VDR_EPG_H
 #define __DBUS2VDR_EPG_H
 
-#include "message.h"
+#include "object.h"
 
 
-class cDBusDispatcherEpg : public cDBusMessageDispatcher
+class cDBusEpg : public cDBusObject
 {
 public:
-  cDBusDispatcherEpg(void);
-  virtual ~cDBusDispatcherEpg(void);
-
-protected:
-  virtual bool          OnIntrospect(DBusMessage *msg, cString &Data);
+  cDBusEpg(void);
+  virtual ~cDBusEpg(void);
 };
 
 #endif

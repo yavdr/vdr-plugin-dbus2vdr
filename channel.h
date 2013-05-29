@@ -1,17 +1,14 @@
 #ifndef __DBUS2VDR_CHANNEL_H
 #define __DBUS2VDR_CHANNEL_H
 
-#include "message.h"
+#include "object.h"
 
 
-class cDBusDispatcherChannel : public cDBusMessageDispatcher
+class cDBusChannels : public cDBusObject
 {
 public:
-  cDBusDispatcherChannel(void);
-  virtual ~cDBusDispatcherChannel(void);
-
-protected:
-  virtual bool          OnIntrospect(DBusMessage *msg, cString &Data);
+  cDBusChannels(void);
+  virtual ~cDBusChannels(void);
 };
 
 #endif

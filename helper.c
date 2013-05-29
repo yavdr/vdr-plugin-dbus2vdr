@@ -1,6 +1,6 @@
 #include "helper.h"
-#include "bus.h"
 
+#include <dbus/dbus.h>
 #include <vdr/plugin.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -63,118 +63,30 @@ void cDBusHelper::ToUtf8(cString &text)
      }
 }
 
-void cDBusHelper::AddArg(DBusMessageIter &args, int type, const void *value)
+void  cDBusHelper::AddKeyValue(GVariantBuilder *Array, const char *Key, const gchar *Type, void **Value)
 {
-  if (value == NULL)
-     return;
-  if (!dbus_message_iter_append_basic(&args, type, value))
-     esyslog("dbus2vdr: AddArg: out of memory while appending argument");
+  GVariantBuilder *element = g_variant_builder_new(G_VARIANT_TYPE("(sv)"));
+
+  g_variant_builder_add(element, "s", Key);
+
+  GVariantBuilder *variant = g_variant_builder_new(G_VARIANT_TYPE("v"));
+  g_variant_builder_add(variant, Type, *Value);
+  g_variant_builder_add_value(element, g_variant_builder_end(variant));
+
+  g_variant_builder_add_value(Array, g_variant_builder_end(element));
+
+  g_variant_builder_unref(variant);
+  g_variant_builder_unref(element);
 }
 
-void cDBusHelper::AddKeyValue(DBusMessageIter &array, const char *key, int type, const char *vtype, void *value)
+void  cDBusHelper::SendReply(GDBusMethodInvocation *Invocation, int  ReplyCode, const char *ReplyMessage)
 {
-  DBusMessageIter element;
-  DBusMessageIter variant;
-
-  if (!dbus_message_iter_open_container(&array, DBUS_TYPE_STRUCT, NULL, &element))
-     esyslog("dbus2vdr: AddKeyValue: can't open struct container");
-  AddArg(element, DBUS_TYPE_STRING, &key);
-  if (!dbus_message_iter_open_container(&element, DBUS_TYPE_VARIANT, vtype, &variant))
-     esyslog("dbus2vdr: AddKeyValue: can't open variant container");
-  AddArg(variant, type, value);
-  if (!dbus_message_iter_close_container(&element, &variant))
-     esyslog("dbus2vdr: AddKeyValue: can't close variant container");
-  if (!dbus_message_iter_close_container(&array, &element))
-     esyslog("dbus2vdr: AddKeyValue: can't close struct container");
+  GVariantBuilder *builder = g_variant_builder_new(G_VARIANT_TYPE("(is)"));
+  g_variant_builder_add(builder, "i", ReplyCode);
+  g_variant_builder_add(builder, "s", ReplyMessage);
+  g_dbus_method_invocation_return_value(Invocation, g_variant_builder_end(builder));
+  g_variant_builder_unref(builder);
 }
-
-int  cDBusHelper::GetNextArg(DBusMessageIter& args, int type, void *value)
-{
-  if (dbus_message_iter_get_arg_type(&args) != type)
-     return -1;
-  dbus_message_iter_get_basic(&args, value);
-  if (dbus_message_iter_next(&args))
-     return 1;
-  return 0;
-}
-
-void  cDBusHelper::SendReply(DBusConnection *conn, DBusMessage *reply)
-{
-  dbus_uint32_t serial = 0;
-  if (!dbus_connection_send(conn, reply, &serial))
-     esyslog("dbus2vdr: SendReply: out of memory while sending the reply");
-  dbus_message_unref(reply);
-}
-
-void  cDBusHelper::SendReply(DBusConnection *conn, DBusMessage *msg, int  returncode, const char *message)
-{
-  DBusMessage *reply = dbus_message_new_method_return(msg);
-  DBusMessageIter args;
-  dbus_message_iter_init_append(reply, &args);
-
-  if (!dbus_message_iter_append_basic(&args, DBUS_TYPE_INT32, &returncode))
-     esyslog("dbus2vdr: SendReply: out of memory while appending the return-code");
-
-  if (message != NULL) {
-     if (!dbus_message_iter_append_basic(&args, DBUS_TYPE_STRING, &message))
-        esyslog("dbus2vdr: SendReply: out of memory while appending the reply-message");
-     }
-
-  cDBusHelper::SendReply(conn, reply);
-}
-
-void  cDBusHelper::SendReply(DBusConnection *conn, DBusMessage *msg, const char *message)
-{
-  DBusMessage *reply = dbus_message_new_method_return(msg);
-  DBusMessageIter args;
-  dbus_message_iter_init_append(reply, &args);
-
-  if (message != NULL) {
-     if (!dbus_message_iter_append_basic(&args, DBUS_TYPE_STRING, &message))
-        esyslog("dbus2vdr: SendReply: out of memory while appending the reply-message");
-     }
-
-  cDBusHelper::SendReply(conn, reply);
-}
-
-cDBusTcpAddress *cDBusHelper::GetNetworkAddress(void)
-{
-  cString filename = cString::sprintf("%s/network-address.conf", *_pluginConfigDir);
-  dsyslog("dbus2vdr: loading network address from file %s", *filename);
-  FILE *f = fopen(*filename, "r");
-  if (f == NULL)
-     return NULL;
-  cReadLine r;
-  char *line = r.Read(f);
-  fclose(f);
-  if (line == NULL)
-     return NULL;
-  DBusError err;
-  dbus_error_init(&err);
-  DBusAddressEntry **addresses = NULL;
-  int len = 0;
-  if (!dbus_parse_address(line, &addresses, &len, &err)) {
-     esyslog("dbus2vdr: errorparsing address %s: %s", line, err.message);
-     dbus_error_free(&err);
-     return NULL;
-     }
-  cDBusTcpAddress *address = NULL;
-  for (int i = 0; i < len; i++) {
-      if (addresses[i] != NULL) {
-         if (strcmp(dbus_address_entry_get_method(addresses[i]), "tcp") == 0) {
-            const char *host = dbus_address_entry_get_value(addresses[i], "host");
-            const char *port = dbus_address_entry_get_value(addresses[i], "port");
-            if ((host != NULL) && (port != NULL) && isnumber(port)) {
-               address = new cDBusTcpAddress(host, atoi(port));
-               break;
-               }
-            }
-         }
-      }
-  dbus_address_entries_free(addresses);
-  return address;
-}
-
 
 cExitPipe::cExitPipe(void)
 {
