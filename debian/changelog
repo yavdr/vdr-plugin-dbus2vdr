@@ -1,3 +1,9 @@
+vdr-plugin-dbus2vdr (12-0yavdr0~precise) precise; urgency=medium
+
+  * new upstream release
+
+ -- Lars Hanisch <dvb@flensrocker.de>  Sat, 01 Jun 2013 09:52:31 +0200
+
 vdr-plugin-dbus2vdr (11-0yavdr0~precise) precise; urgency=medium
 
   * new upstream release known as "The GDBus Release"
