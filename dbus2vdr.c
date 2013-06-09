@@ -38,7 +38,7 @@
 #include "avahi-helper.h"
 
 
-static const char *VERSION        = "12d";
+static const char *VERSION        = "12e";
 static const char *DESCRIPTION    = trNOOP("control vdr via D-Bus");
 static const char *MAINMENUENTRY  = NULL;
 
@@ -318,6 +318,7 @@ void cPluginDbus2vdr::Stop(void)
      _system_bus = NULL;
      }
   cDBusObject::FreeThreadPool();
+  cDBusConnection::FreeThreadPool();
   if (_main_loop != NULL) {
      cPluginManager::CallAllServices("dbus2vdr-MainLoopStopped", NULL);
      delete _main_loop;

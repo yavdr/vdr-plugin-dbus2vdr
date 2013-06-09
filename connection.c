@@ -3,6 +3,39 @@
 #include "object.h"
 
 
+class cConnectionWorkerData
+{
+public:
+  static GThreadPool *_thread_pool;
+
+  cList<cDBusSignal> *_signals;
+
+  cConnectionWorkerData(cList<cDBusSignal> *Signals)
+  {
+    _signals = Signals;
+  };
+
+  ~cConnectionWorkerData(void)
+  {
+    if (_signals != NULL) {
+       delete _signals;
+       _signals = NULL;
+       }
+  };
+};
+
+GThreadPool *cConnectionWorkerData::_thread_pool = NULL;
+
+
+void  cDBusConnection::FreeThreadPool(void)
+{
+  if (cConnectionWorkerData::_thread_pool != NULL) {
+     g_thread_pool_free(cConnectionWorkerData::_thread_pool, FALSE, TRUE);
+     cConnectionWorkerData::_thread_pool = NULL;
+     isyslog("dbus2vdr: thread-pool for handling signal-emits stopped");
+     }
+}
+
 cDBusConnection::cDBusConnection(const char *Busname, GBusType  Type, GMainContext *Context)
 {
   _busname = g_strdup(Busname);
@@ -387,7 +420,7 @@ gboolean  cDBusConnection::do_connect(gpointer user_data)
         return FALSE;
         }
 
-     GSource *source = g_timeout_source_new(500);
+     GSource *source = g_timeout_source_new_seconds(1);
      g_source_set_callback(source, do_reconnect, user_data, NULL);
      g_source_attach(source, conn->_context);
      }
@@ -439,6 +472,18 @@ void  cDBusConnection::on_disconnect_close(GObject *source_object, GAsyncResult 
   g_mutex_unlock(&conn->_disconnect_mutex);
 }
 
+gboolean  cDBusConnection::do_flush(gpointer user_data)
+{
+  if (user_data == NULL)
+     return FALSE;
+
+  cDBusConnection *conn = (cDBusConnection*)user_data;
+  dsyslog("dbus2vdr: %s: do_flush", conn->Name());
+  g_dbus_connection_flush(conn->_connection, NULL, on_flush, user_data);
+
+  return FALSE;
+}
+
 void  cDBusConnection::on_flush(GObject *source_object, GAsyncResult *res, gpointer user_data)
 {
   if (user_data == NULL)
@@ -461,18 +506,6 @@ void  cDBusConnection::on_flush(GObject *source_object, GAsyncResult *res, gpoin
   g_source_attach(source, conn->_context);
 }
 
-gboolean  cDBusConnection::do_flush(gpointer user_data)
-{
-  if (user_data == NULL)
-     return FALSE;
-
-  cDBusConnection *conn = (cDBusConnection*)user_data;
-  dsyslog("dbus2vdr: %s: do_flush", conn->Name());
-  g_dbus_connection_flush(conn->_connection, NULL, on_flush, user_data);
-
-  return FALSE;
-}
-
 gboolean  cDBusConnection::do_emit_signal(gpointer user_data)
 {
   if (user_data == NULL)
@@ -492,24 +525,40 @@ gboolean  cDBusConnection::do_emit_signal(gpointer user_data)
   if (conn->_connect_status < 3)
      return TRUE;
 
+  cList<cDBusSignal>  *signals = NULL;
   g_mutex_lock(&conn->_flush_mutex);
-  GError *err = NULL;
-  for (cDBusSignal *s = conn->_signals.First(); s; s = conn->_signals.Next(s)) {
-      gchar *p = NULL;
-      if (s->_parameters != NULL)
-         p = g_variant_print(s->_parameters, TRUE);
-      dsyslog("dbus2vdr: %s: emit signal %s %s %s %s", conn->Name(), s->_object_path, s->_interface, s->_signal, p);
-      g_free(p);
-      g_dbus_connection_emit_signal(conn->_connection, s->_busname, s->_object_path, s->_interface, s->_signal, s->_parameters, &err);
-      if (err != NULL) {
-         esyslog("dbus2vdr: %s: g_dbus_connection_emit_signal reports: %s", conn->Name(), err->message);
-         g_error_free(err);
-         err = NULL;
-         }
-      }
-  conn->_signals.Clear();
+  if (conn->_signals.Count() > 0) {
+     signals = new cList<cDBusSignal>();
+     do {
+        cDBusSignal *s = conn->_signals.First();
+        if (s == NULL)
+           break;
+        conn->_signals.Del(s, false);
+        signals->Add(s);
+        } while (true);
+     }
   g_cond_signal(&conn->_flush_cond);
   g_mutex_unlock(&conn->_flush_mutex);
+
+  if (signals != NULL) {
+     cConnectionWorkerData *workerData = new cConnectionWorkerData(signals);
+     if (cConnectionWorkerData::_thread_pool == NULL) {
+        GError *err = NULL;
+        cConnectionWorkerData::_thread_pool = g_thread_pool_new(do_work, NULL, 10, FALSE, &err);
+        if (err != NULL) {
+           esyslog("dbus2vdr: g_thread_pool_new reports: %s", err->message);
+           g_error_free(err);
+           if (cConnectionWorkerData::_thread_pool != NULL)
+              g_thread_pool_free(cConnectionWorkerData::_thread_pool, TRUE, FALSE);
+           cConnectionWorkerData::_thread_pool = NULL;
+           do_work(workerData, NULL);
+           return FALSE;
+           }
+        isyslog("dbus2vdr: thread-pool for handling signal-emits started");
+        }
+     g_thread_pool_push(cConnectionWorkerData::_thread_pool, workerData, NULL);
+     }
+
   return FALSE;
 }
 
@@ -535,11 +584,13 @@ gboolean  cDBusConnection::do_call_method(gpointer user_data)
   g_mutex_lock(&conn->_flush_mutex);
   cDBusMethodCall *c = conn->_method_calls.First();
   while (c) {
-        gchar *p = NULL;
-        if (c->_parameters != NULL)
-           p = g_variant_print(c->_parameters, TRUE);
-        dsyslog("dbus2vdr: %s: call method %s %s %s %s", conn->Name(), c->_object_path, c->_interface, c->_method, p);
-        g_free(p);
+        if (SysLogLevel > 2) {
+           gchar *p = NULL;
+           if (c->_parameters != NULL)
+              p = g_variant_print(c->_parameters, TRUE);
+           dsyslog("dbus2vdr: %s: call method %s %s %s %s", conn->Name(), c->_object_path, c->_interface, c->_method, p);
+           g_free(p);
+           }
         g_dbus_connection_call(conn->_connection, c->_busname, c->_object_path, c->_interface, c->_method, c->_parameters, NULL, G_DBUS_CALL_FLAGS_NONE, -1, NULL, (c->_on_reply == NULL ? NULL : do_call_reply), c);
         if (c->_on_reply != NULL) {
            cDBusMethodCall *next = conn->_method_calls.Next(c);
@@ -581,6 +632,31 @@ void  cDBusConnection::on_signal(GDBusConnection *connection, const gchar *sende
   cDBusSignal *signal = (cDBusSignal*)user_data;
   if (signal->_on_signal != NULL)
      signal->_on_signal(sender_name, object_path, interface_name, signal_name, parameters, signal->_on_signal_user_data);
+}
+
+void  cDBusConnection::do_work(gpointer data, gpointer user_data)
+{
+  if (data == NULL)
+     return;
+
+  cConnectionWorkerData *workerData = (cConnectionWorkerData*)data;
+  GError *err = NULL;
+  for (cDBusSignal *s = workerData->_signals->First(); s; s = workerData->_signals->Next(s)) {
+      if (SysLogLevel > 2) {
+         gchar *p = NULL;
+         if (s->_parameters != NULL)
+            p = g_variant_print(s->_parameters, TRUE);
+         dsyslog("dbus2vdr: %s: emit signal %s %s %s %s", s->_connection->Name(), s->_object_path, s->_interface, s->_signal, p);
+         g_free(p);
+         }
+      g_dbus_connection_emit_signal(s->_connection->_connection, s->_busname, s->_object_path, s->_interface, s->_signal, s->_parameters, &err);
+      if (err != NULL) {
+         esyslog("dbus2vdr: %s: g_dbus_connection_emit_signal reports: %s", s->_connection->Name(), err->message);
+         g_error_free(err);
+         err = NULL;
+         }
+      }
+  delete workerData;
 }
 
 

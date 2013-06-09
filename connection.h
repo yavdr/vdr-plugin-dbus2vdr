@@ -87,10 +87,10 @@ private:
                                        GAsyncResult *res,
                                        gpointer user_data);
 
+  static gboolean  do_flush(gpointer user_data);
   static void      on_flush(GObject *source_object,
                             GAsyncResult *res,
                             gpointer user_data);
-  static gboolean  do_flush(gpointer user_data);
 
   static gboolean  do_emit_signal(gpointer user_data);
   static gboolean  do_call_method(gpointer user_data);
@@ -104,6 +104,7 @@ private:
                              const gchar *signal_name,
                              GVariant *parameters,
                              gpointer user_data);
+  static void      do_work(gpointer data, gpointer user_data);
 
   gchar           *_busname;
   GBusType         _bus_type;
@@ -141,6 +142,8 @@ private:
   void  UnregisterObjects(void);
 
 public:
+  static void  FreeThreadPool(void);
+
   cDBusConnection(const char *Busname, GBusType  Type, GMainContext *Context);
   cDBusConnection(const char *Busname, const char *Name, const char *Address, GMainContext *Context);
   virtual ~cDBusConnection(void);
