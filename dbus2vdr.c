@@ -37,12 +37,16 @@
 #include "avahi-helper.h"
 
 
-static const char *VERSION        = "19";
+static const char *VERSION        = "20";
 static const char *DESCRIPTION    = trNOOP("control vdr via D-Bus");
 static const char *MAINMENUENTRY  = NULL;
 
 int dbus2vdr_SysLogLevel = 1;
 int dbus2vdr_SysLogTarget = LOG_USER;
+
+cString dbus2vdr_Busname = "";
+cString dbus2vdr_DBusSessionBusAddress = "";
+cString dbus2vdr_UpstartSession = "";
 
 static bool ParseSysLogLevel(const char *Arg)
 {
@@ -78,6 +82,65 @@ static bool ParseSysLogLevel(const char *Arg)
   return false;
 }
 
+static cString SetSessionEnv(const char *Name, cString &Store, const char *Option, int &ReplyCode, int *HasBeenSet)
+{
+  if (Option && *Option) {
+     if (setenv(Name, Option, 1) < 0) {
+        ReplyCode = 550;
+        cString ret = cString::sprintf("can't set %s to %s", Name, Option);
+        esyslog("dbus2vdr: %s", *ret);
+        return ret;
+        }
+     Store = Option;
+     ReplyCode = 900;
+     cString ret = cString::sprintf("set %s to %s", Name, Option);
+     isyslog("dbus2vdr: %s", *ret);
+     if (HasBeenSet != NULL)
+        *HasBeenSet = 1;
+     return ret;
+     }
+  if (unsetenv(Name) < 0) {
+     ReplyCode = 550;
+     cString ret = cString::sprintf("can't unset %s", Name);
+     esyslog("dbus2vdr: %s", *ret);
+     return ret;
+     }
+  Store = "";
+  ReplyCode = 900;
+  cString ret = cString::sprintf("unset %s ok", Name);
+  isyslog("dbus2vdr: %s", *ret);
+  if (HasBeenSet != NULL)
+     *HasBeenSet = 0;
+  return ret;
+}
+
+static void AddAllObjects(cDBusConnection *Connection, bool EnableOSD)
+{
+  Connection->AddObject(new cDBusChannels);
+  Connection->AddObject(new cDBusEpg);
+  if (EnableOSD)
+     Connection->AddObject(new cDBusOsdObject);
+  cDBusPlugin::AddAllPlugins(Connection);
+  Connection->AddObject(new cDBusPluginManager);
+  Connection->AddObject(new cDBusRecordings);
+  Connection->AddObject(new cDBusRemote);
+  Connection->AddObject(new cDBusSetup);
+  Connection->AddObject(new cDBusShutdown);
+  Connection->AddObject(new cDBusSkin);
+  Connection->AddObject(new cDBusStatus(false));
+  Connection->AddObject(new cDBusTimers);
+  Connection->AddObject(new cDBusVdr);
+}
+
+static void AddAllWatchers(cDBusConnection *Connection, cList<cDBusWatcher> *Watchers)
+{
+  cDBusWatcher *w;
+  while ((w = Watchers->First()) != NULL) {
+        Connection->AddWatcher(w);
+        Watchers->Del(w, false);
+        }
+}
+
 class cPluginDbus2vdr : public cPlugin {
 private:
   // Add any member variables or functions you may need here.
@@ -97,6 +160,9 @@ private:
 
   cList<cDBusWatcher> _system_watchers;
   cList<cDBusWatcher> _session_watchers;
+
+  void StartSessionBus(void);
+  void StopSessionBus(void);
 
 public:
   cPluginDbus2vdr(void);
@@ -139,12 +205,44 @@ cPluginDbus2vdr::cPluginDbus2vdr(void)
   _session_bus = NULL;
   _network_bus = NULL;
 
+  const char *tmp = getenv("DBUS_SESSION_BUS_ADDRESS");
+  if (tmp)
+     dbus2vdr_DBusSessionBusAddress = tmp;
+  tmp = getenv("UPSTART_SESSION");
+  if (tmp)
+     dbus2vdr_UpstartSession = tmp;
+
   g_type_init();
 }
 
 cPluginDbus2vdr::~cPluginDbus2vdr()
 {
   // Clean up after yourself!
+}
+
+void cPluginDbus2vdr::StartSessionBus(void)
+{
+  if (_session_bus != NULL)
+     return;
+
+  if (_enable_session && *dbus2vdr_DBusSessionBusAddress && !isempty(*dbus2vdr_DBusSessionBusAddress)) {
+     gchar *session_address = g_dbus_address_get_for_bus_sync(G_BUS_TYPE_SESSION, NULL, NULL);
+     if (session_address != NULL) {
+        _session_bus = new cDBusConnection(*dbus2vdr_Busname, "Session", session_address, NULL);
+        AddAllObjects(_session_bus, _enable_osd);
+        AddAllWatchers(_session_bus, &_session_watchers);
+        _session_bus->Connect(FALSE);
+        g_free(session_address);
+        }
+     }
+}
+
+void cPluginDbus2vdr::StopSessionBus(void)
+{
+  if (_session_bus != NULL) {
+     delete _session_bus;
+     _session_bus = NULL;
+     }
 }
 
 const char *cPluginDbus2vdr::CommandLineHelp(void)
@@ -271,34 +369,15 @@ bool cPluginDbus2vdr::Initialize(void)
   if (!dbus_threads_init_default())
      esyslog("dbus2vdr: dbus_threads_init_default returns an error - not good!");
   cDBusShutdown::StartupTime = time(NULL);
+#if VDRVERSNUM < 10704
+  dbus2vdr_Busname = cString::sprintf("%s", DBUS_VDR_BUSNAME);
+#else
+  if (InstanceId > 0)
+     dbus2vdr_Busname = cString::sprintf("%s%d", DBUS_VDR_BUSNAME, InstanceId);
+  else
+     dbus2vdr_Busname = cString::sprintf("%s", DBUS_VDR_BUSNAME);
+#endif
   return true;
-}
-
-static void AddAllObjects(cDBusConnection *Connection, bool EnableOSD)
-{
-  Connection->AddObject(new cDBusChannels);
-  Connection->AddObject(new cDBusEpg);
-  if (EnableOSD)
-     Connection->AddObject(new cDBusOsdObject);
-  cDBusPlugin::AddAllPlugins(Connection);
-  Connection->AddObject(new cDBusPluginManager);
-  Connection->AddObject(new cDBusRecordings);
-  Connection->AddObject(new cDBusRemote);
-  Connection->AddObject(new cDBusSetup);
-  Connection->AddObject(new cDBusShutdown);
-  Connection->AddObject(new cDBusSkin);
-  Connection->AddObject(new cDBusStatus(false));
-  Connection->AddObject(new cDBusTimers);
-  Connection->AddObject(new cDBusVdr);
-}
-
-static void AddAllWatchers(cDBusConnection *Connection, cList<cDBusWatcher> *Watchers)
-{
-  cDBusWatcher *w;
-  while ((w = Watchers->First()) != NULL) {
-        Connection->AddWatcher(w);
-        Watchers->Del(w, false);
-        }
 }
 
 bool cPluginDbus2vdr::Start(void)
@@ -310,19 +389,10 @@ bool cPluginDbus2vdr::Start(void)
      cPluginManager::CallAllServices("dbus2vdr-MainLoopStarted", NULL);
      }
 
-  cString busname;
-#if VDRVERSNUM < 10704
-  busname = cString::sprintf("%s", DBUS_VDR_BUSNAME);
-#else
-  if (InstanceId > 0)
-     busname = cString::sprintf("%s%d", DBUS_VDR_BUSNAME, InstanceId);
-  else
-     busname = cString::sprintf("%s", DBUS_VDR_BUSNAME);
-#endif
   if (_enable_system) {
      gchar *system_address = g_dbus_address_get_for_bus_sync(G_BUS_TYPE_SYSTEM, NULL, NULL);
      if (system_address != NULL) {
-        _system_bus = new cDBusConnection(*busname, "System", system_address, NULL);
+        _system_bus = new cDBusConnection(*dbus2vdr_Busname, "System", system_address, NULL);
         AddAllObjects(_system_bus, _enable_osd);
         AddAllWatchers(_system_bus, &_system_watchers);
         _system_bus->Connect(TRUE);
@@ -330,20 +400,11 @@ bool cPluginDbus2vdr::Start(void)
         }
      }
 
-  if (_enable_session) {
-     gchar *session_address = g_dbus_address_get_for_bus_sync(G_BUS_TYPE_SESSION, NULL, NULL);
-     if (session_address != NULL) {
-        _session_bus = new cDBusConnection(*busname, "Session", session_address, NULL);
-        AddAllObjects(_session_bus, _enable_osd);
-        AddAllWatchers(_session_bus, &_session_watchers);
-        _session_bus->Connect(TRUE);
-        g_free(session_address);
-        }
-     }
+  StartSessionBus();
 
   if (_enable_network) {
      cString filename = cString::sprintf("%s/network-address.conf", cPlugin::ConfigDirectory(Name()));
-     _network_bus = new cDBusNetwork(*busname, *filename, NULL);
+     _network_bus = new cDBusNetwork(*dbus2vdr_Busname, *filename, NULL);
      _network_bus->Start();
      
      cDBusNetworkClient::StartClients(NULL);
@@ -371,10 +432,7 @@ void cPluginDbus2vdr::Stop(void)
      delete _network_bus;
      _network_bus = NULL;
      }
-  if (_session_bus != NULL) {
-     delete _session_bus;
-     _session_bus = NULL;
-     }
+  StopSessionBus();
   if (_system_bus != NULL) {
      delete _system_bus;
      _system_bus = NULL;
@@ -519,7 +577,7 @@ cString cPluginDbus2vdr::SVDRPCommand(const char *Command, const char *Option, i
      ReplyCode = 901;
      return "dbus2vdr does not run the default GMainLoop";
      }
-  if (strcmp(Command, "SetSysLogLevel") == 0) {
+  else if (strcmp(Command, "SetSysLogLevel") == 0) {
      if (ParseSysLogLevel(Option)) {
         ReplyCode = 900;
         return cString::sprintf("SysLogLevel set to %s", Option);
@@ -527,7 +585,21 @@ cString cPluginDbus2vdr::SVDRPCommand(const char *Command, const char *Option, i
      ReplyCode = 501;
      return cString::sprintf("unknown SysLogLevel %s", Option);
      }
-  if (strcmp(Command, "WatchBusname") == 0) {
+  else if (strcmp(Command, "SetDBusSessionBusAddress") == 0) {
+     int hasBeenSet = -1;
+     cString msg = SetSessionEnv("DBUS_SESSION_BUS_ADDRESS", dbus2vdr_DBusSessionBusAddress, Option, ReplyCode, &hasBeenSet);
+     if (hasBeenSet == 1) {
+        StopSessionBus(); // if the address changes without previous unset
+        StartSessionBus();
+        }
+     else if (hasBeenSet == 0)
+        StopSessionBus();
+     return msg;
+     }
+  else if (strcmp(Command, "SetUpstartSession") == 0) {
+     return SetSessionEnv("UPSTART_SESSION", dbus2vdr_UpstartSession, Option, ReplyCode, 0);
+     }
+  else if (strcmp(Command, "WatchBusname") == 0) {
      cAvahiHelper options(Option);
      const char *caller = options.Get("caller");   // the name of the calling plugin
      const char *watch = options.Get("watch");     // the name to watch
