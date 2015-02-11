@@ -1,3 +1,9 @@
+vdr-plugin-dbus2vdr (23-0yavdr0~trusty) trusty; urgency=medium
+
+  * new upstream version
+
+ -- Lars Hanisch <dvb@flensrocker.de>  Wed, 11 Feb 2015 23:19:55 +0100
+
 vdr-plugin-dbus2vdr (22-0yavdr0~precise) precise; urgency=medium
 
   * add new status call ChannelChange
