@@ -1,17 +1,16 @@
 #!/usr/bin/make -f
 
-.PHONY: override_dh_strip override_dh_auto_install
+#DH_VERBOSE=1
 
-override_dh_strip:
-	dh_strip --dbg-package=vdr-plugin-dbus2vdr-dbg
-
-override_dh_auto_install:
-	dh_auto_install --destdir=debian/vdr-plugin-dbus2vdr
-
-override_dh_gencontrol:
-	sh /usr/share/vdr-dev/dependencies.sh
-	dh_gencontrol
+PLG_PACKAGE = $(filter-out %-dbg, $(shell dh_listpackages))
+DBG_PACKAGE = $(filter %-dbg, $(shell dh_listpackages))
 
 %:
-	dh $@
+	dh $@ --with vdrplugin
+
+override_dh_auto_install:
+	dh_auto_install --destdir=debian/$(PLG_PACKAGE)
+
+override_dh_strip:
+	dh_strip --dbg-package=$(DBG_PACKAGE)
 

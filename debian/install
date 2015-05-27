@@ -1,6 +1,3 @@
-# default plugin config
-debian/plugin.dbus2vdr.conf    etc/vdr/plugins/
-
 #DBus activation config
 #etc/de.tvdr.vdr-upstart.service usr/share/dbus-1/system-services/
 
