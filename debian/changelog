@@ -1,3 +1,9 @@
+vdr-plugin-dbus2vdr (25-0yavdr0~precise) precise; urgency=medium
+
+  * new upstream version
+
+ -- root <dvb@flensrocker.de>  Sat, 13 Jun 2015 11:20:19 +0000
+
 vdr-plugin-dbus2vdr (23.1-0yavdr0~trusty) trusty; urgency=medium
 
   * new upstream version
