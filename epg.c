@@ -7,6 +7,7 @@
 #include <vdr/eit.h>
 #include <vdr/epg.h>
 #include <vdr/svdrp.h>
+#include <vdr/timers.h>
 
 
 namespace cDBusEpgHelper
@@ -110,13 +111,26 @@ namespace cDBusEpgHelper
        tChannelID ChannelID = tChannelID::InvalidID;
        if (isnumber(channel)) {
           int o = strtol(channel, NULL, 10);
-          if (o >= 1 && o <= Channels.MaxNumber())
-             ChannelID = Channels.GetByNumber(o)->GetChannelID();
+#if VDRVERSNUM > 20300
+          LOCK_CHANNELS_READ;
+          const cChannels *channels = Channels;
+#else
+          cChannels *channels = &Channels;
+#endif
+          if (o >= 1 && o <= channels->MaxNumber())
+             ChannelID = channels->GetByNumber(o)->GetChannelID();
           }
        else {
           ChannelID = tChannelID::FromString(channel);
           if (ChannelID == tChannelID::InvalidID) {
-             for (cChannel *Channel = Channels.First(); Channel; Channel = Channels.Next(Channel)) {
+             const cChannels *channels = NULL;
+#if VDRVERSNUM > 20300
+             LOCK_CHANNELS_READ;
+             channels = Channels;
+#else
+             channels = &Channels;
+#endif
+             for (const cChannel *Channel = channels->First(); Channel; Channel = channels->Next(Channel)) {
                  if (!Channel->GroupSep()) {
                     if (strcasecmp(Channel->Name(), channel) == 0) {
                        ChannelID = Channel->GetChannelID();
@@ -127,8 +141,13 @@ namespace cDBusEpgHelper
              }
           }
        if (!(ChannelID == tChannelID::InvalidID)) {
+#if VDRVERSNUM > 20300
+          cStateKey StateKey;
+          cSchedules *s = cSchedules::GetSchedulesWrite(StateKey, 1000);
+#else
           cSchedulesLock SchedulesLock(true, 1000);
           cSchedules *s = (cSchedules *)cSchedules::Schedules(SchedulesLock);
+#endif
           if (s) {
              cSchedule *Schedule = NULL;
              ChannelID.ClrRid();
@@ -150,6 +169,9 @@ namespace cDBusEpgHelper
                 cString replyMessage = cString::sprintf("No EPG data found for channel \"%s\"", channel);
                 cDBusHelper::SendReply(Invocation, 550, *replyMessage);
                 }
+#if VDRVERSNUM > 20300
+             StateKey.Remove();
+#endif
              }
           else
              cDBusHelper::SendReply(Invocation, 451, "Can't get EPG data");
@@ -160,13 +182,83 @@ namespace cDBusEpgHelper
           }
        }
     else {
+#if VDRVERSNUM > 20300
+       LOCK_TIMERS_WRITE;
+       LOCK_SCHEDULES_WRITE;
+       for (cTimer *Timer = Timers->First(); Timer; Timer = Timers->Next(Timer))
+           Timer->SetEvent(NULL); // processing all timers here (local *and* remote)
+       for (cSchedule *Schedule = Schedules->First(); Schedule; Schedule = Schedules->Next(Schedule))
+           Schedule->Cleanup(INT_MAX);
+#else
        cSchedules::ClearAll();
-       #if APIVERSNUM >= 10711
+#endif
        cEitFilter::SetDisableUntil(time(NULL) + eitDisableTime);
-       #endif
        cDBusHelper::SendReply(Invocation, 250, "EPG data cleared");
        }
   };
+
+#if VDRVERSNUM > 20300
+// copied from svdrp.c, maybe it will be available in future versions?
+// --- cPUTEhandler ----------------------------------------------------------
+
+class cPUTEhandler {
+private:
+  FILE *f;
+  int status;
+  const char *message;
+public:
+  cPUTEhandler(void);
+  ~cPUTEhandler();
+  bool Process(const char *s);
+  int Status(void) { return status; }
+  const char *Message(void) { return message; }
+  };
+
+cPUTEhandler::cPUTEhandler(void)
+{
+  if ((f = tmpfile()) != NULL) {
+     status = 354;
+     message = "Enter EPG data, end with \".\" on a line by itself";
+     }
+  else {
+     LOG_ERROR;
+     status = 554;
+     message = "Error while opening temporary file";
+     }
+}
+
+cPUTEhandler::~cPUTEhandler()
+{
+  if (f)
+     fclose(f);
+}
+
+bool cPUTEhandler::Process(const char *s)
+{
+  if (f) {
+     if (strcmp(s, ".") != 0) {
+        fputs(s, f);
+        fputc('\n', f);
+        return true;
+        }
+     else {
+        rewind(f);
+        if (cSchedules::Read(f)) {
+           cSchedules::Cleanup(true);
+           status = 250;
+           message = "EPG data processed";
+           }
+        else {
+           status = 451;
+           message = "Error while processing EPG data";
+           }
+        fclose(f);
+        f = NULL;
+        }
+     }
+  return false;
+}
+#endif
 
   static void PutEntry(cDBusObject *Object, GVariant *Parameters, GDBusMethodInvocation *Invocation)
   {
@@ -285,7 +377,11 @@ namespace cDBusEpgHelper
     g_variant_builder_unref(arr);
   }
 
-  static bool sGetChannel(GVariant *Arg, const char **Input, cChannel **Channel)
+#if VDRVERSNUM > 20300
+  static bool sGetChannel(GVariant *Arg, const char **Input, const cChannels* Channels, const cChannel **Channel)
+#else
+  static bool sGetChannel(GVariant *Arg, const char **Input, cChannels* Channels, const cChannel **Channel)
+#endif
   {
     *Channel = NULL;
     *Input = NULL;
@@ -294,9 +390,9 @@ namespace cDBusEpgHelper
        if (**Input == 0)
           return true;
        if (isnumber(*Input))
-          *Channel = Channels.GetByNumber(strtol(*Input, NULL, 10));
+          *Channel = Channels->GetByNumber(strtol(*Input, NULL, 10));
        else
-          *Channel = Channels.GetByChannelID(tChannelID::FromString(*Input));
+          *Channel = Channels->GetByChannelID(tChannelID::FromString(*Input));
        if (*Channel == NULL)
           return false;
        }
@@ -320,12 +416,18 @@ namespace cDBusEpgHelper
   
   static void sGetEntries(cDBusObject *Object, GVariant *Parameters, GDBusMethodInvocation *Invocation, eMode mode)
   {
-    cChannel *channel = NULL;
+#if VDRVERSNUM > 20300
+    LOCK_CHANNELS_READ;
+    const cChannels *channels = Channels;
+#else
+    cChannels *channels = &Channels;
+#endif
+    const cChannel *channel = NULL;
     guint64 atTime = 0;
     GVariant *first = g_variant_get_child_value(Parameters, 0);
     
     const char *c = NULL;
-    if (!sGetChannel(first, &c, &channel)) {
+    if (!sGetChannel(first, &c, channels, &channel)) {
        cString reply = cString::sprintf("channel \"%s\" not defined", c);
        esyslog("dbus2vdr: %s.GetEntries: %s", DBUS_VDR_EPG_INTERFACE, *reply);
        sReturnError(Invocation, 501, *reply);
@@ -346,13 +448,19 @@ namespace cDBusEpgHelper
        }
     g_variant_unref(first);
 
+    const cSchedules *scheds = NULL;
+#if VDRVERSNUM > 20300
+    cStateKey StateKey;
+    scheds = cSchedules::GetSchedulesRead(StateKey, 1000);
+#else
     cSchedulesLock sl(false, 1000);
     if (!sl.Locked()) {
        sReturnError(Invocation, 550, "got no lock on schedules");
        return;
        }
 
-    const cSchedules *scheds = cSchedules::Schedules(sl);
+    scheds = cSchedules::Schedules(sl);
+#endif
     if (scheds == NULL) {
        sReturnError(Invocation, 550, "got no schedules");
        return;
@@ -365,7 +473,7 @@ namespace cDBusEpgHelper
 
     bool next = false;
     if (channel == NULL) {
-       channel = Channels.First();
+       channel = channels->First();
        next = true;
        }
 
@@ -391,11 +499,14 @@ namespace cDBusEpgHelper
                 sAddEvent(array, *e);
              }
           if (next)
-             channel = Channels.Next(channel);
+             channel = channels->Next(channel);
           else
              break;
           }
 
+#if VDRVERSNUM > 20300
+    StateKey.Remove();
+#endif
     g_variant_builder_add_value(builder, g_variant_builder_end(array));
     g_dbus_method_invocation_return_value(Invocation, g_variant_builder_end(builder));
     g_variant_builder_unref(array);

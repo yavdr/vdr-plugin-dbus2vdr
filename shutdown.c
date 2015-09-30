@@ -49,7 +49,13 @@ public:
        }
 
     time_t Now = time(NULL);
-    cTimer *timer = Timers.GetNextActiveTimer();
+#if VDRVERSNUM > 20300
+    LOCK_TIMERS_READ;
+    const cTimers *timers = Timers;
+#else
+    cTimers *timers = &Timers;
+#endif
+    const cTimer *timer = timers->GetNextActiveTimer();
     time_t Next = timer ? timer->StartTime() : 0;
     time_t Delta = timer ? Next - Now : 0;
     if (cRecordControls::Active() || (Next && Delta <= 0)) {
@@ -192,7 +198,13 @@ public:
     cString info = "";
     
     time_t Now = time(NULL);
-    cTimer *timer = Timers.GetNextActiveTimer();
+#if VDRVERSNUM > 20300
+    LOCK_TIMERS_READ;
+    const cTimers *timers = Timers;
+#else
+    cTimers *timers = &Timers;
+#endif
+    const cTimer *timer = timers->GetNextActiveTimer();
     time_t Next = timer ? timer->StartTime() : 0;
     cPlugin *Plugin = cPluginManager::GetNextWakeupPlugin();
     time_t NextPlugin = Plugin ? Plugin->WakeupTime() : 0;
