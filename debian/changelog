@@ -1,3 +1,9 @@
+vdr-plugin-dbus2vdr (26-1-g314f95e-0yavdr0~trusty) trusty; urgency=medium
+
+  * new upstream version
+
+ -- Lars Hanisch <dvb@flensrocker.de>  Wed, 30 Sep 2015 22:38:36 +0200
+
 vdr-plugin-dbus2vdr (25-0yavdr0~trusty) trusty; urgency=medium
 
   * new upstream version
