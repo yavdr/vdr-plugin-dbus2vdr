@@ -1,3 +1,9 @@
+vdr-plugin-dbus2vdr (29-0yavdr0~trusty) trusty; urgency=medium
+
+  * new upstream version (nulldevice release)
+
+ -- Lars Hanisch <dvb@flensrocker.de>  Fri, 04 Mar 2016 18:56:38 +0100
+
 vdr-plugin-dbus2vdr (28-0yavdr0~trusty) trusty; urgency=medium
 
   * new upstream version
