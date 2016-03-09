@@ -1,3 +1,9 @@
+vdr-plugin-dbus2vdr (30-0yavdr0~trusty) trusty; urgency=medium
+
+  * new upstream version (timer.ListDetailed)
+
+ -- Lars Hanisch <dvb@flensrocker.de>  Wed, 09 Mar 2016 21:24:15 +0100
+
 vdr-plugin-dbus2vdr (29-0yavdr0~trusty) trusty; urgency=medium
 
   * new upstream version (nulldevice release)
